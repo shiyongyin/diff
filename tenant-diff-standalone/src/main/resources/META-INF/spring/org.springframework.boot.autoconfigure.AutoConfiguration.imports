@@ -1,0 +1,3 @@
+com.diff.standalone.config.TenantDiffStandaloneConfiguration
+com.diff.standalone.config.TenantDiffSchemaInitConfiguration
+com.diff.standalone.datasource.DiffDataSourceAutoConfiguration
