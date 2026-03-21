@@ -1,0 +1,17 @@
+{
+  "sessionId": __SESSION_ID__,
+  "direction": "A_TO_B",
+  "options": {
+    "mode": "EXECUTE",
+    "allowDelete": false,
+    "maxAffectedRows": 10,
+    "businessKeys": [],
+    "businessTypes": [
+      "EXAMPLE_PRODUCT"
+    ],
+    "diffTypes": [
+      "INSERT",
+      "UPDATE"
+    ]
+  }
+}

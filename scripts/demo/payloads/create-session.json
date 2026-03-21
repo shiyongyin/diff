@@ -1,0 +1,9 @@
+{
+  "sourceTenantId": 1,
+  "targetTenantId": 2,
+  "scope": {
+    "businessTypes": [
+      "EXAMPLE_PRODUCT"
+    ]
+  }
+}
