@@ -1,0 +1,53 @@
+spring:
+  application:
+    name: tenant-diff-demo
+
+  datasource:
+    url: jdbc:h2:mem:tenant_diff;DB_CLOSE_DELAY=-1;MODE=MYSQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: auto
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [sessionId=%X{sessionId}] [applyId=%X{applyId}] %logger{36} - %msg%n"
+
+tenant-diff:
+  standalone:
+    enabled: true
+    default-ignore-fields:
+      - id
+      - tenantsid
+      - version
+      - data_modify_time
+      - xai_instruction_id
+      - xai_instr_recommended_id
+      - xai_enumeration_id
+      - xai_operation_id
+      - xai_ocr_template_id
+      - baseinstructionid
+      - baseparamid
+      - basedisplayid
+      - baserecommendedid
+      - baseenumid
+      - baseenumvalueid
+      - baseconditionid
+      - baseoperationid
+      - basepromptid
