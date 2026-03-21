@@ -1,0 +1,25 @@
+changelog:
+  categories:
+    - title: Breaking Changes
+      labels:
+        - breaking-change
+    - title: Features
+      labels:
+        - enhancement
+        - feature
+    - title: Fixes
+      labels:
+        - bug
+        - fix
+    - title: Docs and Examples
+      labels:
+        - docs
+        - example
+    - title: Tests and Tooling
+      labels:
+        - test
+        - ci
+        - maintenance
+    - title: Other Changes
+      labels:
+        - '*'

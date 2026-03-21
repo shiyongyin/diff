@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+    <!-- Exclude Lombok-generated code -->
+    <Match>
+        <Source name="~.*\.java"/>
+        <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2"/>
+    </Match>
+    <!-- Exclude builder classes -->
+    <Match>
+        <Class name="~.*Builder"/>
+    </Match>
+    <!-- Exclude redundant null checks (often from Lombok or defensive coding) -->
+    <Match>
+        <Bug pattern="RCN_REDUNDANT_NULLCHECK_OF_NONNULL_VALUE"/>
+    </Match>
+</FindBugsFilter>

@@ -1,0 +1,52 @@
+name: Bug report
+description: 报告一个可复现的问题
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈问题。请尽量提供最小复现信息，便于快速定位。
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / 分支
+      placeholder: 例如 0.0.1-SNAPSHOT / main
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 影响范围
+      options:
+        - core
+        - demo
+        - docs
+        - ci
+        - build
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: 问题描述
+      placeholder: 请描述实际现象
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: 1. ... 2. ... 3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图 / 附加信息
+      render: shell
