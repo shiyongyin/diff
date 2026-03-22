@@ -16,6 +16,7 @@ import com.diff.standalone.model.StandaloneTenantModelBuilder;
 import com.diff.standalone.persistence.TenantDiffTableNames;
 import com.diff.standalone.snapshot.StandaloneSnapshotBuilder;
 import com.diff.standalone.persistence.mapper.TenantDiffApplyRecordMapper;
+import com.diff.standalone.persistence.mapper.TenantDiffApplyLeaseMapper;
 import com.diff.standalone.persistence.mapper.TenantDiffResultMapper;
 import com.diff.standalone.persistence.mapper.TenantDiffSessionMapper;
 import com.diff.standalone.persistence.mapper.TenantDiffSnapshotMapper;
@@ -24,9 +25,13 @@ import com.diff.standalone.plugin.StandalonePluginRegistry;
 import com.diff.standalone.datasource.DiffDataSourceRegistry;
 import com.diff.standalone.persistence.mapper.TenantDiffDecisionRecordMapper;
 import com.diff.standalone.service.DecisionRecordService;
+import com.diff.standalone.service.ApplyAuditService;
+import com.diff.standalone.service.ApplyLeaseService;
 import com.diff.standalone.service.TenantDiffStandaloneApplyService;
 import com.diff.standalone.service.TenantDiffStandaloneRollbackService;
 import com.diff.standalone.service.TenantDiffStandaloneService;
+import com.diff.standalone.service.impl.ApplyAuditServiceImpl;
+import com.diff.standalone.service.impl.ApplyLeaseServiceImpl;
 import com.diff.standalone.service.impl.DecisionRecordServiceImpl;
 import com.diff.standalone.service.impl.TenantDiffStandaloneApplyServiceImpl;
 import com.diff.standalone.service.impl.TenantDiffStandaloneRollbackServiceImpl;
@@ -41,8 +46,10 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.lang.Nullable;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Duration;
 import java.util.List;
 
 /**
@@ -197,6 +204,24 @@ public class TenantDiffStandaloneConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean
+    public ApplyAuditService applyAuditService(
+        TenantDiffApplyRecordMapper applyRecordMapper,
+        PlatformTransactionManager transactionManager
+    ) {
+        return new ApplyAuditServiceImpl(applyRecordMapper, transactionManager);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public ApplyLeaseService applyLeaseService(
+        TenantDiffApplyLeaseMapper applyLeaseMapper,
+        PlatformTransactionManager transactionManager
+    ) {
+        return new ApplyLeaseServiceImpl(applyLeaseMapper, transactionManager);
+    }
+
+    @Bean
     public TenantDiffStandaloneApplyService tenantDiffStandaloneApplyService(
         TenantDiffApplyRecordMapper applyRecordMapper,
         TenantDiffSnapshotMapper snapshotMapper,
@@ -204,10 +229,20 @@ public class TenantDiffStandaloneConfiguration {
         TenantDiffResultMapper resultMapper,
         StandaloneSnapshotBuilder snapshotBuilder,
         StandaloneApplyExecutor applyExecutor,
+        TenantDiffEngine diffEngine,
         PlanBuilder planBuilder,
         ObjectMapper objectMapper,
         @org.springframework.beans.factory.annotation.Value("${tenant-diff.apply.preview-action-limit:5000}")
         int previewActionLimit,
+        @org.springframework.beans.factory.annotation.Value("${tenant-diff.apply.preview-token-ttl:PT30M}")
+        Duration previewTokenTtl,
+        @org.springframework.beans.factory.annotation.Value("${tenant-diff.apply.max-compare-age:PT0S}")
+        Duration maxCompareAge,
+        @org.springframework.beans.factory.annotation.Value("${tenant-diff.apply.target-lease-ttl:PT10M}")
+        Duration targetLeaseTtl,
+        ApplyAuditService applyAuditService,
+        ApplyLeaseService applyLeaseService,
+        StandalonePluginRegistry pluginRegistry,
         @Nullable DecisionRecordService decisionRecordService
     ) {
         return new TenantDiffStandaloneApplyServiceImpl(
@@ -217,9 +252,16 @@ public class TenantDiffStandaloneConfiguration {
             resultMapper,
             snapshotBuilder,
             applyExecutor,
+            diffEngine,
             planBuilder,
             objectMapper,
             previewActionLimit,
+            previewTokenTtl,
+            maxCompareAge,
+            targetLeaseTtl,
+            applyAuditService,
+            applyLeaseService,
+            pluginRegistry,
             decisionRecordService
         );
     }
@@ -229,6 +271,7 @@ public class TenantDiffStandaloneConfiguration {
         TenantDiffApplyRecordMapper applyRecordMapper,
         TenantDiffSnapshotMapper snapshotMapper,
         TenantDiffSessionMapper sessionMapper,
+        TenantDiffResultMapper resultMapper,
         StandaloneTenantModelBuilder modelBuilder,
         TenantDiffEngine diffEngine,
         PlanBuilder planBuilder,
@@ -240,6 +283,7 @@ public class TenantDiffStandaloneConfiguration {
             applyRecordMapper,
             snapshotMapper,
             sessionMapper,
+            resultMapper,
             modelBuilder,
             diffEngine,
             planBuilder,

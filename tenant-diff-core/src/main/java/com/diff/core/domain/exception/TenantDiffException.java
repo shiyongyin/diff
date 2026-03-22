@@ -24,12 +24,13 @@ import lombok.Getter;
 @Getter
 public class TenantDiffException extends RuntimeException {
 
+    /** 结构化错误码。 */
     private final ErrorCode errorCode;
 
     /**
      * 使用错误码构造异常（message 取自 ErrorCode 默认消息）。
      *
-     * @param errorCode 结构化错误码
+     * @param errorCode 结构化错误码    
      */
     public TenantDiffException(ErrorCode errorCode) {
         super(errorCode.getMessage());

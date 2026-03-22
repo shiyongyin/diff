@@ -48,6 +48,12 @@ public class TenantDiffStandaloneApplyController {
     private final TenantDiffStandaloneApplyService applyService;
     private final TenantDiffStandaloneRollbackService rollbackService;
 
+    /**
+     * 依赖注入的构造函数，分别传入 Apply、Rollback 服务，保持 Controller 层仅处理 HTTP 语义。
+     *
+     * @param applyService    用于构建 Plan 与执行 Apply 的核心服务
+     * @param rollbackService 用于执行回滚并报告结果的服务
+     */
     public TenantDiffStandaloneApplyController(
         TenantDiffStandaloneApplyService applyService,
         TenantDiffStandaloneRollbackService rollbackService

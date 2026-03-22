@@ -49,6 +49,8 @@ class DemoSessionApiIntegrationTests {
             .andExpect(jsonPath("$.success").value(true))
             .andExpect(jsonPath("$.data.sessionId").value(sessionId))
             .andExpect(jsonPath("$.data.status").value("SUCCESS"))
+            .andExpect(jsonPath("$.data.warningCount").value(0))
+            .andExpect(jsonPath("$.data.warnings").isArray())
             .andExpect(jsonPath("$.data.statistics.totalBusinesses").value(greaterThanOrEqualTo(1)));
 
         mockMvc.perform(get("/api/tenantDiff/standalone/session/listBusiness")

@@ -35,30 +35,39 @@ import java.util.Map;
 @AllArgsConstructor
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class DiffSession {
+    /** 会话 ID。 */
     @JsonProperty("sessionId")
     private String sessionId;
 
+    /** 源租户 ID。 */
     @JsonProperty("sourceTenantId")
     private String sourceTenantId;
 
+    /** 目标租户 ID。 */
     @JsonProperty("targetTenantId")
     private String targetTenantId;
 
+    /** 范围。 */
     @JsonProperty("scope")
     private Map<String, Object> scope;
 
+    /** 选项。 */
     @JsonProperty("options")
     private Map<String, Object> options;
 
+    /** 状态。 */
     @JsonProperty("status")
     private SessionStatus status;
 
+    /** 创建时间。 */
     @JsonProperty("createdAt")
     private Instant createdAt;
 
+    /** 完成时间。 */
     @JsonProperty("finishedAt")
     private Instant finishedAt;
 
+    /** 错误消息。 */
     @JsonProperty("errorMsg")
     private String errorMsg;
 }

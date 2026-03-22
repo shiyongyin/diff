@@ -31,13 +31,26 @@ import java.util.Map;
 @ConfigurationProperties(prefix = "tenant-diff")
 public class DiffDataSourceProperties {
 
+    /** 外部命名 Diff 数据源配置；key 与 {@code DiffDataSourceRegistry} 注册时保持一致。 */
     private Map<String, DiffDataSourceConfig> datasources = new LinkedHashMap<>();
 
+    /**
+     * 单个命名 Diff 数据源的配置项。
+     *
+     * <p>由 {@link DiffDataSourceAutoConfiguration} 读取，用于初始化额外的 Hikari 连接池并加入
+     * {@link DiffDataSourceRegistry}，确保每个额外数据源都具备连接地址/凭据和 fail-fast 参数。</p>
+     *
+     * @since 2026-01-20
+     */
     @Data
     public static class DiffDataSourceConfig {
+        /** 目标数据源的 JDBC URL，用于 Hikari 初始化。 */
         private String url;
+        /** 连接用户名（敏感信息），用于建立连接。 */
         private String username;
+        /** 连接密码，用于建立连接。 */
         private String password;
+        /** 驱动类名，默认使用 MySQL 官方驱动。 */
         private String driverClassName = "com.mysql.cj.jdbc.Driver";
         /** 最大连接数。Diff 对比为低频操作，默认 3 足够。 */
         private int maximumPoolSize = 3;

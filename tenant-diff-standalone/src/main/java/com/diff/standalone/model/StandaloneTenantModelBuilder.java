@@ -72,7 +72,7 @@ public class StandaloneTenantModelBuilder {
      * @author tenant-diff
      * @since 2026-01-20
      */
-    public record BuildResult(List<BusinessData> models, List<String> warnings) {
+    public record BuildResult(List<BusinessData> models, List<BuildWarning> warnings) {
     }
 
     /**
@@ -97,7 +97,7 @@ public class StandaloneTenantModelBuilder {
         LoadOptions effectiveOptions = options == null ? LoadOptions.builder().build() : options;
 
         List<BusinessData> results = new ArrayList<>();
-        List<String> warnings = new ArrayList<>();
+        List<BuildWarning> warnings = new ArrayList<>();
 
         for (String businessType : scope.getBusinessTypes()) {
             StandaloneBusinessTypePlugin plugin = pluginRegistry.getRequired(businessType);
@@ -118,12 +118,18 @@ public class StandaloneTenantModelBuilder {
                         results.add(model);
                     } else {
                         // 插件返回空模型：记录警告但不中断
-                        warnings.add("插件返回空模型: businessType=" + businessType + ", businessKey=" + key);
+                        warnings.add(new BuildWarning(
+                            businessType,
+                            key,
+                            "插件返回空模型"));
                     }
                 } catch (Exception e) {
                     // 容错策略：单个业务键加载失败不阻断整体构建
                     // 将失败信息收集到 warnings，由调用方决定如何处理（容忍 or 中断）
-                    warnings.add("加载业务数据失败: businessType=" + businessType + ", businessKey=" + key + ", error=" + e.getMessage());
+                    warnings.add(new BuildWarning(
+                        businessType,
+                        key,
+                        "加载业务数据失败: " + e.getMessage()));
                 }
             }
         }
@@ -131,4 +137,3 @@ public class StandaloneTenantModelBuilder {
         return new BuildResult(results, warnings);
     }
 }
-

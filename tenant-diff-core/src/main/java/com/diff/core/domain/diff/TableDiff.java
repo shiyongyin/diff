@@ -62,18 +62,22 @@ public class TableDiff {
     @AllArgsConstructor
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class TableDiffCounts {
+        /** INSERT 动作数量。 */
         @JsonProperty("insertCount")
         @Builder.Default
         private Integer insertCount = 0;
 
+        /** UPDATE 动作数量。 */
         @JsonProperty("updateCount")
         @Builder.Default
         private Integer updateCount = 0;
 
+        /** DELETE 动作数量。 */
         @JsonProperty("deleteCount")
         @Builder.Default
         private Integer deleteCount = 0;
 
+        /** NOOP 动作数量。 */
         @JsonProperty("noopCount")
         @Builder.Default
         private Integer noopCount = 0;

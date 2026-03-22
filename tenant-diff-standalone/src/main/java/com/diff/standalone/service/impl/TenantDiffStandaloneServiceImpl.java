@@ -15,6 +15,8 @@ import com.diff.core.domain.scope.LoadOptions;
 import com.diff.standalone.web.dto.request.CreateDiffSessionRequest;
 import com.diff.core.domain.diff.DiffSessionOptions;
 import com.diff.standalone.web.dto.response.DiffSessionSummaryResponse;
+import com.diff.standalone.model.BuildWarning;
+import com.diff.standalone.model.SessionWarning;
 import com.diff.standalone.model.StandaloneTenantModelBuilder;
 import com.diff.standalone.persistence.entity.TenantDiffResultPo;
 import com.diff.standalone.persistence.entity.TenantDiffSessionPo;
@@ -28,9 +30,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import org.slf4j.MDC;
-
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -163,30 +165,35 @@ public class TenantDiffStandaloneServiceImpl implements TenantDiffStandaloneServ
         if (session == null) {
             throw new TenantDiffException(ErrorCode.SESSION_NOT_FOUND);
         }
+        SessionStatus currentStatus = session.getStatus() == null ? null : SessionStatus.fromValue(session.getStatus());
+        if (currentStatus == SessionStatus.APPLYING || currentStatus == SessionStatus.ROLLING_BACK) {
+            throw new TenantDiffException(ErrorCode.SESSION_COMPARE_CONFLICT);
+        }
 
         MDC.put("sessionId", String.valueOf(sessionId));
         long startMs = System.currentTimeMillis();
         try {
             log.info("开始执行对比: sessionId={}", sessionId);
-            updateSessionStatus(sessionId, SessionStatus.RUNNING, null, null);
+            updateSessionStatus(sessionId, SessionStatus.RUNNING, null, null, null);
 
             // 模型构建在事务外执行，避免长事务；compare 为纯内存计算，失败时无需回滚 DB。
-            TenantDiffEngine.CompareResult compareResult = doCompare(session);
+            CompareExecutionContext compareContext = doCompare(session);
 
             transactionTemplate.execute(status -> {
                 // 为保证可重跑的幂等性：同一 session 重跑时用"先删后插"替换结果集。
                 resultMapper.delete(new QueryWrapper<TenantDiffResultPo>()
                     .eq("session_id", sessionId)
                 );
-                batchSaveResult(sessionId, compareResult.businessDiffs());
-                updateSessionStatus(sessionId, SessionStatus.SUCCESS, null, LocalDateTime.now());
+                batchSaveResult(sessionId, compareContext.compareResult().businessDiffs());
+                updateSessionStatus(sessionId, SessionStatus.SUCCESS, null, LocalDateTime.now(),
+                    toJsonOrNull(compareContext.warnings()));
                 return null;
             });
             log.info("对比完成: sessionId={}, 耗时={}ms", sessionId, System.currentTimeMillis() - startMs);
         } catch (Exception e) {
             String errorMsg = buildErrorMsg(e);
             try {
-                updateSessionStatus(sessionId, SessionStatus.FAILED, errorMsg, LocalDateTime.now());
+                updateSessionStatus(sessionId, SessionStatus.FAILED, errorMsg, LocalDateTime.now(), null);
             } catch (Exception updateError) {
                 log.warn("更新会话状态失败: sessionId={}", sessionId, updateError);
             }
@@ -196,7 +203,7 @@ public class TenantDiffStandaloneServiceImpl implements TenantDiffStandaloneServ
         }
     }
 
-    private TenantDiffEngine.CompareResult doCompare(TenantDiffSessionPo session) {
+    private CompareExecutionContext doCompare(TenantDiffSessionPo session) {
         if (session == null) {
             throw new IllegalArgumentException("session is null");
         }
@@ -223,10 +230,13 @@ public class TenantDiffStandaloneServiceImpl implements TenantDiffStandaloneServ
         StandaloneTenantModelBuilder.BuildResult source = modelBuilder.buildWithWarnings(session.getSourceTenantId(), scope, sourceLoadOptions);
         StandaloneTenantModelBuilder.BuildResult target = modelBuilder.buildWithWarnings(session.getTargetTenantId(), scope, targetLoadOptions);
 
-        logWarnings(session.getId(), "source", source.warnings());
-        logWarnings(session.getId(), "target", target.warnings());
+        List<SessionWarning> warnings = new ArrayList<>();
+        warnings.addAll(logWarnings(session.getId(), "source", source.warnings()));
+        warnings.addAll(logWarnings(session.getId(), "target", target.warnings()));
 
-        return diffEngine.compare(source.models(), target.models(), diffRules);
+        return new CompareExecutionContext(
+            diffEngine.compare(source.models(), target.models(), diffRules),
+            warnings);
     }
 
     @Override
@@ -241,6 +251,7 @@ public class TenantDiffStandaloneServiceImpl implements TenantDiffStandaloneServ
         }
 
         DiffStatistics statistics = aggregateStatistics(sessionId);
+        List<SessionWarning> warnings = parseSessionWarnings(session.getWarningJson());
         return DiffSessionSummaryResponse.builder()
             .sessionId(session.getId())
             .sourceTenantId(session.getSourceTenantId())
@@ -250,6 +261,8 @@ public class TenantDiffStandaloneServiceImpl implements TenantDiffStandaloneServ
             .createdAt(session.getCreatedAt())
             .finishedAt(session.getFinishedAt())
             .errorMsg(session.getErrorMsg())
+            .warningCount(warnings.size())
+            .warnings(warnings)
             .build();
     }
 
@@ -473,25 +486,36 @@ public class TenantDiffStandaloneServiceImpl implements TenantDiffStandaloneServ
         }
     }
 
-    private void updateSessionStatus(Long sessionId, SessionStatus status, String errorMsg, LocalDateTime finishedAt) {
+    private void updateSessionStatus(Long sessionId, SessionStatus status, String errorMsg, LocalDateTime finishedAt,
+                                     String warningJson) {
         TenantDiffSessionPo update = new TenantDiffSessionPo();
         update.setId(sessionId);
         update.setStatus(status == null ? null : status.name());
         update.setErrorMsg(errorMsg);
         update.setFinishedAt(finishedAt);
+        update.setWarningJson(warningJson);
         sessionMapper.updateById(update);
     }
 
-    private void logWarnings(Long sessionId, String side, List<String> warnings) {
+    private List<SessionWarning> logWarnings(Long sessionId, String side, List<BuildWarning> warnings) {
         if (warnings == null || warnings.isEmpty()) {
-            return;
+            return List.of();
         }
-        for (String warning : warnings) {
-            if (warning == null || warning.isBlank()) {
+        List<SessionWarning> sessionWarnings = new ArrayList<>();
+        for (BuildWarning warning : warnings) {
+            if (warning == null || warning.message() == null || warning.message().isBlank()) {
                 continue;
             }
-            log.warn("租户差异对比警告: sessionId={}, side={}, msg={}", sessionId, side, warning);
+            SessionWarning sessionWarning = new SessionWarning(
+                side,
+                warning.businessType(),
+                warning.businessKey(),
+                warning.message());
+            sessionWarnings.add(sessionWarning);
+            log.warn("租户差异对比警告: sessionId={}, side={}, businessType={}, businessKey={}, msg={}",
+                sessionId, side, warning.businessType(), warning.businessKey(), warning.message());
         }
+        return sessionWarnings;
     }
 
     private String toJsonOrNull(Object value) {
@@ -525,6 +549,26 @@ public class TenantDiffStandaloneServiceImpl implements TenantDiffStandaloneServ
         } catch (Exception e) {
             throw new IllegalArgumentException("JSON parse failed for " + fieldName + ": " + e.getMessage(), e);
         }
+    }
+
+    private List<SessionWarning> parseSessionWarnings(String warningJson) {
+        if (warningJson == null || warningJson.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<SessionWarning> warnings = objectMapper.readValue(
+                warningJson,
+                objectMapper.getTypeFactory().constructCollectionType(List.class, SessionWarning.class));
+            return warnings == null ? List.of() : Collections.unmodifiableList(warnings);
+        } catch (Exception e) {
+            throw new IllegalStateException("warning_json deserialize failed: " + e.getMessage(), e);
+        }
+    }
+
+    private record CompareExecutionContext(
+        TenantDiffEngine.CompareResult compareResult,
+        List<SessionWarning> warnings
+    ) {
     }
 
     private static DiffType resolveTopDiffType(BusinessDiff diff) {

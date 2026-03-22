@@ -32,7 +32,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <ul>
  *     <li>中间 action 失败时，executor 的 SQL 写入全部回滚</li>
  *     <li>apply_record 保留 FAILED 状态（审计轨迹不丢失）</li>
- *     <li>snapshot 保留（可用于排查和手动恢复）</li>
+ *     <li>snapshot 仍随业务事务回滚，不留下半成品快照</li>
  * </ul>
  * </p>
  */
@@ -56,7 +56,7 @@ class ApplyTransactionBoundaryTest {
     private JdbcTemplate jdbcTemplate;
 
     @Test
-    @DisplayName("中间 action 失败时，executor SQL 回滚，但审计记录和快照保留")
+    @DisplayName("中间 action 失败时，executor SQL 回滚，FAILED 审计保留，snapshot 回滚")
     void apply_should_rollback_all_when_middle_action_fails() throws Exception {
         long sessionId = createSession();
 
@@ -125,12 +125,16 @@ class ApplyTransactionBoundaryTest {
         assertEquals(0, priceBefore.compareTo(priceAfter),
             "事务回滚后，PROD-002 价格应与 apply 前一致");
 
-        // 验证 3：apply_record 随事务回滚（当前 v1 限制，审计轨迹仅保留在日志中）
+        // 验证 3：apply_record 以 FAILED 状态保留
         int applyRecordCountAfter = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM xai_tenant_diff_apply_record WHERE session_id = ?",
             Integer.class, sessionId);
-        assertEquals(applyRecordCountBefore, applyRecordCountAfter,
-            "事务回滚后，apply_record 数量应与 apply 前一致");
+        assertEquals(applyRecordCountBefore + 1, applyRecordCountAfter,
+            "事务回滚后，应额外保留一条 FAILED 状态的 apply_record");
+        String lastApplyStatus = jdbcTemplate.queryForObject(
+            "SELECT status FROM xai_tenant_diff_apply_record WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+            String.class, sessionId);
+        assertEquals(ApplyRecordStatus.FAILED.name(), lastApplyStatus);
 
         // 验证 4：snapshot 随事务回滚
         int snapshotCountAfter = jdbcTemplate.queryForObject(
@@ -165,6 +169,13 @@ class ApplyTransactionBoundaryTest {
             "SELECT COUNT(*) FROM xai_tenant_diff_apply_record WHERE session_id = ? AND status = 'SUCCESS'",
             Integer.class, sessionId);
         assertEquals(1, applyRecordCount, "成功 apply 后应有一条 SUCCESS 状态的 apply_record");
+
+        String diagnosticsJson = jdbcTemplate.queryForObject(
+            "SELECT diagnostics_json FROM xai_tenant_diff_apply_record WHERE session_id = ? AND status = 'SUCCESS'",
+            String.class, sessionId);
+        assertNotNull(diagnosticsJson);
+        assertTrue(diagnosticsJson.contains("APPLY_VALIDATED"));
+        assertTrue(diagnosticsJson.contains("\"remainingDiffCount\":0"));
 
         // 验证 snapshot 持久化
         int snapshotCount = jdbcTemplate.queryForObject(

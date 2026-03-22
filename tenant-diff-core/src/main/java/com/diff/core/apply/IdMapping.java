@@ -73,6 +73,13 @@ public class IdMapping {
         return Collections.unmodifiableMap(new HashMap<>(map));
     }
 
+    /**
+     * 组合表名和记录业务键为复合键。
+     *
+     * @param tableName         表名
+     * @param recordBusinessKey 记录的业务键
+     * @return 复合键
+     */
     private static String compositeKey(String tableName, String recordBusinessKey) {
         return Objects.toString(tableName, "") + "::" + Objects.toString(recordBusinessKey, "");
     }

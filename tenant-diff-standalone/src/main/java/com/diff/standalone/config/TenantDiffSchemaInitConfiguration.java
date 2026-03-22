@@ -30,6 +30,13 @@ import javax.sql.DataSource;
 @EnableConfigurationProperties(TenantDiffProperties.class)
 public class TenantDiffSchemaInitConfiguration {
 
+    /**
+     * 总是初始化 Schema。
+     *
+     * @param dataSource 数据源
+     * @param properties 属性
+     * @return 初始化器
+     */
     @Bean
     @ConditionalOnProperty(name = "tenant-diff.standalone.schema.init-mode",
                            havingValue = "always")
@@ -38,6 +45,13 @@ public class TenantDiffSchemaInitConfiguration {
         return new TenantDiffSchemaInitializer(dataSource, properties, false);
     }
 
+    /**
+     * 仅对嵌入式数据库初始化 Schema。
+     *
+     * @param dataSource 数据源
+     * @param properties 属性
+     * @return 初始化器
+     */
     @Bean
     @ConditionalOnProperty(name = "tenant-diff.standalone.schema.init-mode",
                            havingValue = "embedded-only")

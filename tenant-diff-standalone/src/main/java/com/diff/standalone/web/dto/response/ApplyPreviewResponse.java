@@ -65,6 +65,8 @@ public class ApplyPreviewResponse {
 
     /**
      * Action 级预览条目（面向前端展示，隐藏 domain 层 payload）。
+     *
+     * <p>用于构建可渲染的审查行，每条记录只暴露必要的 key/级联信息，避免前端依赖 engine 细节。</p>
      */
     @Data
     @Builder

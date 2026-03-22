@@ -11,7 +11,11 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 
 /**
- * Apply 执行响应（审计 + 快照 + 执行结果）。
+ * Apply 执行响应（审计 + 快照 + 执行结果），用于告知调用方当前 {@link com.diff.core.domain.apply.ApplyRecord} 的状态。
+ *
+ * <p>
+ * 包含 applyId、执行方向、状态、执行记录与最终 {@link ApplyResult}，便于前端展示执行进度与失败原因。
+ * </p>
  *
  * @author tenant-diff
  * @since 2026-01-20
@@ -30,4 +34,3 @@ public class TenantDiffApplyExecuteResponse {
     private LocalDateTime finishedAt;
     private ApplyResult applyResult;
 }
-

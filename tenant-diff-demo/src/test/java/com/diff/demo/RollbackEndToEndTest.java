@@ -2,6 +2,8 @@ package com.diff.demo;
 
 import com.diff.core.domain.apply.*;
 import com.diff.core.domain.diff.DiffType;
+import com.diff.core.domain.exception.ErrorCode;
+import com.diff.core.domain.exception.TenantDiffException;
 import com.diff.standalone.service.TenantDiffStandaloneApplyService;
 import com.diff.standalone.service.TenantDiffStandaloneRollbackService;
 import com.diff.standalone.service.TenantDiffStandaloneService;
@@ -109,6 +111,9 @@ class RollbackEndToEndTest {
         // Rollback
         TenantDiffRollbackResponse rollbackResponse = rollbackService.rollback(response.getApplyId());
         assertTrue(rollbackResponse.getApplyResult().isSuccess());
+        assertNotNull(rollbackResponse.getVerification());
+        assertNotNull(rollbackResponse.getVerification().getSummary());
+        assertTrue(rollbackResponse.getVerification().getRemainingDiffCount() >= 0);
 
         // 字段级验证：PROD-002 所有字段恢复
         Map<String, Object> prod002After = jdbcTemplate.queryForMap(
@@ -160,6 +165,8 @@ class RollbackEndToEndTest {
         // Rollback
         TenantDiffRollbackResponse rollbackResponse = rollbackService.rollback(response.getApplyId());
         assertTrue(rollbackResponse.getApplyResult().isSuccess());
+        assertNotNull(rollbackResponse.getVerification());
+        assertNotNull(rollbackResponse.getVerification().getSummary());
 
         // PROD-003 应被删除
         assertEquals(0, jdbcTemplate.queryForObject(
@@ -206,6 +213,42 @@ class RollbackEndToEndTest {
         // Rollback
         TenantDiffRollbackResponse rollbackResponse = rollbackService.rollback(response.getApplyId());
         assertTrue(rollbackResponse.getApplyResult().isSuccess());
+        assertNotNull(rollbackResponse.getVerification());
+        assertNotNull(rollbackResponse.getVerification().getSummary());
+    }
+
+    @Test
+    @DisplayName("snapshot 缺失时回滚被拒绝")
+    void rollback_missingSnapshot_shouldFail() {
+        Long sessionId = createAndCompare();
+        TenantDiffApplyExecuteResponse response = applyInsertAndUpdate(sessionId);
+
+        jdbcTemplate.update("DELETE FROM xai_tenant_diff_snapshot WHERE apply_id = ?", response.getApplyId());
+
+        TenantDiffException ex = assertThrows(TenantDiffException.class,
+            () -> rollbackService.rollback(response.getApplyId()));
+        assertEquals(ErrorCode.ROLLBACK_SNAPSHOT_INCOMPLETE, ex.getErrorCode());
+    }
+
+    @Test
+    @DisplayName("检测到目标数据漂移时，需显式确认后才能回滚")
+    void rollback_driftRequiresAcknowledgement() {
+        Long sessionId = createAndCompare();
+        TenantDiffApplyExecuteResponse response = applyInsertAndUpdate(sessionId);
+
+        jdbcTemplate.update(
+            "UPDATE example_product SET price = ? WHERE tenantsid = 2 AND product_code = 'PROD-002'",
+            new BigDecimal("333.00")
+        );
+
+        TenantDiffException ex = assertThrows(TenantDiffException.class,
+            () -> rollbackService.rollback(response.getApplyId()));
+        assertEquals(ErrorCode.ROLLBACK_DRIFT_DETECTED, ex.getErrorCode());
+
+        TenantDiffRollbackResponse acknowledged = rollbackService.rollback(response.getApplyId(), true);
+        assertTrue(acknowledged.getApplyResult().isSuccess());
+        assertEquals(Boolean.TRUE, acknowledged.getDriftDetected());
+        assertNotNull(acknowledged.getDiagnostics());
     }
 
     @Test

@@ -24,11 +24,19 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class ApplyActionError {
+    /** 动作唯一标识（actionId）。 */   
+    private String actionId;
+    /** 业务类型。 */
     private String businessType;
+    /** 业务键。 */
     private String businessKey;
+    /** 表名。 */
     private String tableName;
+    /** 记录业务键。 */
     private String recordBusinessKey;
+    /** 操作类型。 */
     private DiffType diffType;
+    /** 表依赖层级（冗余自 diff 结果，用于执行排序）。 */
     private Integer dependencyLevel;
     /** 错误/告警描述信息。 */
     private String message;

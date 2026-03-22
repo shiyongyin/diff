@@ -28,6 +28,7 @@ import java.util.List;
  *
  * <p>
  * 注意：插件应尽量使用稳定 businessKey 定位业务对象，避免跨 tenant 依赖自增 id。
+ * 插件实例由 Spring 以单例形式管理，实现类必须保持无状态，或自行保证并发调用下的线程安全。
  * </p>
  *
  * @author tenant-diff
@@ -83,4 +84,3 @@ public interface StandaloneBusinessTypePlugin {
      */
     BusinessData loadBusiness(Long tenantId, String businessKey, LoadOptions options);
 }
-

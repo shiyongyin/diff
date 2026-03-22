@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS xai_tenant_diff_session (
     options_json CLOB,
     status      VARCHAR(32),
     error_msg   CLOB,
+    warning_json CLOB,
     version     INT DEFAULT 0,
     created_at  TIMESTAMP,
     finished_at TIMESTAMP
@@ -30,16 +31,36 @@ CREATE TABLE IF NOT EXISTS xai_tenant_diff_result (
 );
 
 CREATE TABLE IF NOT EXISTS xai_tenant_diff_apply_record (
-    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
-    apply_key   VARCHAR(64),
-    session_id  BIGINT,
-    direction   VARCHAR(32),
-    plan_json   CLOB,
-    status      VARCHAR(32),
-    error_msg   CLOB,
-    version     INT DEFAULT 0,
-    started_at  TIMESTAMP,
-    finished_at TIMESTAMP
+    id                   BIGINT AUTO_INCREMENT PRIMARY KEY,
+    apply_key            VARCHAR(64),
+    session_id           BIGINT,
+    target_tenant_id     BIGINT,
+    target_data_source_key VARCHAR(64),
+    direction            VARCHAR(32),
+    plan_json            CLOB,
+    status               VARCHAR(32),
+    error_msg            CLOB,
+    failure_stage        VARCHAR(64),
+    failure_action_id    VARCHAR(512),
+    diagnostics_json     CLOB,
+    version              INT DEFAULT 0,
+    started_at           TIMESTAMP,
+    finished_at          TIMESTAMP,
+    verify_status        VARCHAR(32),
+    verify_json          CLOB
+);
+
+CREATE TABLE IF NOT EXISTS xai_tenant_diff_apply_lease (
+    id                     BIGINT AUTO_INCREMENT PRIMARY KEY,
+    target_tenant_id       BIGINT NOT NULL,
+    target_data_source_key VARCHAR(64) NOT NULL,
+    session_id             BIGINT NOT NULL,
+    apply_id               BIGINT,
+    lease_token            VARCHAR(64) NOT NULL,
+    leased_at              TIMESTAMP NOT NULL,
+    expires_at             TIMESTAMP NOT NULL,
+    CONSTRAINT uk_apply_lease_target UNIQUE (target_tenant_id, target_data_source_key),
+    CONSTRAINT uk_apply_lease_token UNIQUE (lease_token)
 );
 
 CREATE TABLE IF NOT EXISTS xai_tenant_diff_snapshot (

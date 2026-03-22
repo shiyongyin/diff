@@ -49,6 +49,12 @@ public class TenantDiffStandaloneSessionController {
     private final TenantDiffStandaloneService service;
     private final StandaloneTenantModelBuilder modelBuilder;
 
+    /**
+     * 构造时注入核心服务与模型构建器，保持 controller 层聚焦 HTTP -> 服务调用的转换。
+     *
+     * @param service      负责 session 生命周期管理与 diff 数据查询的 facade
+     * @param modelBuilder 用于获取 businessType 对应 schema，支持筛选视图投影
+     */
     public TenantDiffStandaloneSessionController(
         TenantDiffStandaloneService service,
         StandaloneTenantModelBuilder modelBuilder

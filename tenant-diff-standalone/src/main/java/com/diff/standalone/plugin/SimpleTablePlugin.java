@@ -40,6 +40,10 @@ import java.util.Set;
  * }</pre>
  * </p>
  *
+ * <p>
+ * 提示：若 plugin 包含额外字段（如 JSON 解析、字段转换），应通过 protected 方法向子类暴露，避免 override 基类核心流程。
+ * </p>
+ *
  * @author tenant-diff
  * @since 2026-03-08
  * @see AbstractStandaloneBusinessPlugin

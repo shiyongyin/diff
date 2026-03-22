@@ -16,6 +16,7 @@ import org.springframework.web.method.annotation.HandlerMethodValidationExceptio
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import java.util.Map;
+import static java.util.Map.entry;
 import java.util.stream.Collectors;
 
 /**
@@ -34,16 +35,31 @@ import java.util.stream.Collectors;
 @RestControllerAdvice(basePackages = "com.diff.standalone.web.controller")
 public class TenantDiffStandaloneExceptionHandler {
 
-    private static final Map<String, HttpStatus> ERROR_CODE_STATUS_MAP = Map.of(
-        ErrorCode.PARAM_INVALID.getCode(), HttpStatus.BAD_REQUEST,
-        ErrorCode.SESSION_NOT_FOUND.getCode(), HttpStatus.NOT_FOUND,
-        ErrorCode.APPLY_RECORD_NOT_FOUND.getCode(), HttpStatus.NOT_FOUND,
-        ErrorCode.BUSINESS_DETAIL_NOT_FOUND.getCode(), HttpStatus.NOT_FOUND,
-        ErrorCode.APPLY_CONCURRENT_CONFLICT.getCode(), HttpStatus.CONFLICT,
-        ErrorCode.ROLLBACK_CONCURRENT_CONFLICT.getCode(), HttpStatus.CONFLICT,
-        ErrorCode.SESSION_ALREADY_APPLIED.getCode(), HttpStatus.CONFLICT
+    private static final Map<String, HttpStatus> ERROR_CODE_STATUS_MAP = Map.ofEntries(
+        entry(ErrorCode.PARAM_INVALID.getCode(), HttpStatus.BAD_REQUEST),
+        entry(ErrorCode.SESSION_NOT_FOUND.getCode(), HttpStatus.NOT_FOUND),
+        entry(ErrorCode.APPLY_RECORD_NOT_FOUND.getCode(), HttpStatus.NOT_FOUND),
+        entry(ErrorCode.BUSINESS_DETAIL_NOT_FOUND.getCode(), HttpStatus.NOT_FOUND),
+        entry(ErrorCode.SESSION_COMPARE_CONFLICT.getCode(), HttpStatus.CONFLICT),
+        entry(ErrorCode.APPLY_CONCURRENT_CONFLICT.getCode(), HttpStatus.CONFLICT),
+        entry(ErrorCode.APPLY_TARGET_BUSY.getCode(), HttpStatus.CONFLICT),
+        entry(ErrorCode.APPLY_COMPARE_TOO_OLD.getCode(), HttpStatus.CONFLICT),
+        entry(ErrorCode.ROLLBACK_DRIFT_DETECTED.getCode(), HttpStatus.CONFLICT),
+        entry(ErrorCode.ROLLBACK_CONCURRENT_CONFLICT.getCode(), HttpStatus.CONFLICT),
+        entry(ErrorCode.SESSION_ALREADY_APPLIED.getCode(), HttpStatus.CONFLICT)
     );
 
+    /**
+     * 处理参数绑定校验失败，返回统一的错误结构。
+     *
+     * <p>
+     * 该 handler 只负责合并 binding 结果并触发 {@link ErrorCode#PARAM_INVALID}，
+     * 让前端感知参数校验失败而不用解析异常堆栈。
+     * </p>
+     *
+     * @param e 校验异常
+     * @return 400 + 参数无效错误码
+     */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Object>> handleMethodArgumentNotValid(MethodArgumentNotValidException e) {
         String detail = e.getBindingResult().getFieldErrors().stream()
@@ -53,6 +69,12 @@ public class TenantDiffStandaloneExceptionHandler {
         return ResponseEntity.badRequest().body(ApiResponse.fail(ErrorCode.PARAM_INVALID));
     }
 
+    /**
+     * 处理方法级参数校验失败（例如 {@code @Validated}）并返回统一响应。
+     *
+     * @param e 校验异常
+     * @return 400 + 参数无效错误码
+     */
     @ExceptionHandler(HandlerMethodValidationException.class)
     public ResponseEntity<ApiResponse<Object>> handleHandlerMethodValidation(HandlerMethodValidationException e) {
         String detail = e.getAllErrors().stream()
@@ -62,6 +84,12 @@ public class TenantDiffStandaloneExceptionHandler {
         return ResponseEntity.badRequest().body(ApiResponse.fail(ErrorCode.PARAM_INVALID));
     }
 
+    /**
+     * 处理 {@link jakarta.validation.constraints} 注解触发的约束异常。
+     *
+     * @param e 校验异常
+     * @return 400 + 参数无效错误码
+     */
     @ExceptionHandler(ConstraintViolationException.class)
     public ResponseEntity<ApiResponse<Object>> handleConstraintViolation(ConstraintViolationException e) {
         String detail = e.getConstraintViolations().stream()
@@ -71,12 +99,24 @@ public class TenantDiffStandaloneExceptionHandler {
         return ResponseEntity.badRequest().body(ApiResponse.fail(ErrorCode.PARAM_INVALID));
     }
 
+    /**
+     * 处理请求体解析失败（如 JSON 结构不匹配）的问题，避免抛出底层 HttpMessageNotReadableException。
+     *
+     * @param e 解析异常
+     * @return 400 + 请求体格式错误
+     */
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiResponse<Object>> handleNotReadable(HttpMessageNotReadableException e) {
         log.warn("请求体解析失败: {}", e.getMessage());
         return ResponseEntity.badRequest().body(ApiResponse.fail(ErrorCode.REQUEST_BODY_MALFORMED));
     }
 
+    /**
+     * 处理业务层抛出的 {@link TenantDiffException}，并根据错误码映射 HTTP 状态。
+     *
+     * @param e 业务异常
+     * @return 业务对应的 Status + 脱敏 ApiResponse
+     */
     @ExceptionHandler(TenantDiffException.class)
     public ResponseEntity<ApiResponse<Object>> handleTenantDiffException(TenantDiffException e) {
         log.warn("业务异常 [{}]: {}", e.getErrorCode().getCode(), e.getMessage());
@@ -84,6 +124,12 @@ public class TenantDiffStandaloneExceptionHandler {
         return ResponseEntity.status(status).body(ApiResponse.fail(e.getErrorCode()));
     }
 
+    /**
+     * 处理 {@link IllegalArgumentException}，常见于 controller 参数预检或 parse 失败。
+     *
+     * @param e 非法参数异常
+     * @return 400 + 参数无效错误
+     */
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ApiResponse<Object>> handleIllegalArgument(IllegalArgumentException e) {
         log.warn("非法参数: {}", e.getMessage());

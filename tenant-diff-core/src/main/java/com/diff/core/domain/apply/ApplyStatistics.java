@@ -31,12 +31,15 @@ public class ApplyStatistics {
     @Builder.Default
     private Integer estimatedAffectedRows = 0;
 
+    /** INSERT 动作数量。 */
     @Builder.Default
     private Integer insertCount = 0;
 
+    /** UPDATE 动作数量。 */
     @Builder.Default
     private Integer updateCount = 0;
 
+    /** DELETE 动作数量。 */
     @Builder.Default
     private Integer deleteCount = 0;
 }

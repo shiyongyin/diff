@@ -60,7 +60,10 @@ import java.util.stream.Collectors;
  */
 public class PlanBuilder {
 
+    /** 最大选择动作 ID 数量。 */
     private static final int MAX_SELECTED_ACTION_IDS = 5000;
+
+    /** 最大动作 ID 长度。*/
     private static final int MAX_ACTION_ID_LENGTH = 512;
 
     /**
@@ -85,14 +88,21 @@ public class PlanBuilder {
         if (direction == null) {
             throw new IllegalArgumentException("direction is null");
         }
+
+        // 获取有效的 options
         ApplyOptions effectiveOptions = options == null ? ApplyOptions.builder().build() : options;
 
         List<ApplyAction> actions = new ArrayList<>();
 
+        // 获取不为空的所有 businessKey 集合
         Set<String> businessKeyAllow = toStringSet(effectiveOptions.getBusinessKeys());
+        // 获取不为空的所有 businessType 集合
         Set<String> businessTypeAllow = toStringSet(effectiveOptions.getBusinessTypes());
+
+        // 获取有效的 diffType
         Set<DiffType> diffTypeAllow = effectiveOptions.getDiffTypes() == null ? Set.of() : new HashSet<>(effectiveOptions.getDiffTypes());
 
+        // 是否允许删除
         boolean allowDelete = effectiveOptions.isAllowDelete();
 
         if (diffs != null) {
@@ -133,11 +143,13 @@ public class PlanBuilder {
                         }
 
                         actions.add(ApplyAction.builder()
-                            .actionId(ApplyAction.computeActionId(
+                            .actionId(
+                                ApplyAction.computeActionId(
                                 businessDiff.getBusinessType(),
                                 businessDiff.getBusinessKey(),
                                 tableDiff.getTableName(),
-                                recordDiff.getRecordBusinessKey()))
+                                recordDiff.getRecordBusinessKey())
+                            )
                             .businessType(businessDiff.getBusinessType())
                             .businessKey(businessDiff.getBusinessKey())
                             .tableName(tableDiff.getTableName())
@@ -228,30 +240,54 @@ public class PlanBuilder {
                                              List<ApplyAction> allActions,
                                              String actualToken) {
         String expectedToken = computePreviewToken(sessionId, direction, allActions);
-        if (!expectedToken.equals(actualToken)) {
+        if (!extractPreviewHash(expectedToken).equals(extractPreviewHash(actualToken))) {
             throw new TenantDiffException(ErrorCode.SELECTION_STALE,
                 "previewToken mismatch: diff data may have changed since last preview");
         }
     }
 
+    private static String extractPreviewHash(String previewToken) {
+        if (previewToken == null || previewToken.isBlank()) {
+            return previewToken;
+        }
+        if (previewToken.startsWith("pt_v1_")) {
+            return previewToken.substring("pt_v1_".length());
+        }
+        if (previewToken.startsWith("pt_v2_")) {
+            String[] parts = previewToken.split("_", 4);
+            return parts.length == 4 ? parts[3] : previewToken;
+        }
+        return previewToken;
+    }
+
+    /**
+     * 归一化选择的动作 ID。
+     *
+     * @param raw 原始动作 ID 集合
+     * @return 归一化后的动作 ID 集合
+     */
     private static Set<String> normalizeSelectedIds(Set<String> raw) {
         if (raw == null || raw.isEmpty()) {
             return Set.of();
         }
+        // 校验动作 ID 数量
         if (raw.size() > MAX_SELECTED_ACTION_IDS) {
             throw new TenantDiffException(ErrorCode.PARAM_INVALID,
                 "selectedActionIds count(" + raw.size()
                     + ") exceeds limit(" + MAX_SELECTED_ACTION_IDS + ")");
         }
+        // 归一化动作 ID
         Set<String> result = new LinkedHashSet<>();
         for (String id : raw) {
             if (id == null || id.isBlank()) {
                 continue;
             }
+            // 校验动作 ID 格式
             if (!id.startsWith("v1:")) {
                 throw new TenantDiffException(ErrorCode.SELECTION_INVALID_ID,
                     "invalid actionId format (missing v1: prefix): " + id);
             }
+            // 校验动作 ID 长度
             if (id.length() > MAX_ACTION_ID_LENGTH) {
                 throw new TenantDiffException(ErrorCode.SELECTION_INVALID_ID,
                     "actionId length exceeds " + MAX_ACTION_ID_LENGTH + ": " + id.length());
@@ -261,7 +297,14 @@ public class PlanBuilder {
         return Collections.unmodifiableSet(result);
     }
 
+    /**
+     * 验证选择的动作 ID 是否存在。
+     *
+     * @param selectedIds 选择的动作 ID 集合
+     * @param allActions 所有动作列表
+     */
     private static void validateSelectedIdsExist(Set<String> selectedIds, List<ApplyAction> allActions) {
+        // 获取不为空的所有动作 ID
         Set<String> validIds = allActions == null
             ? Set.of()
             : allActions.stream()
@@ -277,7 +320,9 @@ public class PlanBuilder {
             }
         }
         if (!unknownIds.isEmpty()) {
+            // 获取第一个未知动作 ID
             String first = unknownIds.get(0);
+            // 构建错误消息
             String msg = "unknown actionIds (" + unknownIds.size() + "): " + first
                 + (unknownIds.size() > 1 ? " and " + (unknownIds.size() - 1) + " more" : "");
             throw new TenantDiffException(ErrorCode.SELECTION_INVALID_ID, msg);
@@ -298,8 +343,10 @@ public class PlanBuilder {
             if (!selectedIds.contains(action.getActionId())) {
                 continue;
             }
+            // 获取依赖层级
             int level = action.getDependencyLevel() == null ? 0 : action.getDependencyLevel();
             if (level > 0) {
+                // 抛出异常 参数无效
                 throw new TenantDiffException(ErrorCode.PARAM_INVALID,
                     "selectionMode=PARTIAL does not support sub-table actions (dependencyLevel="
                         + level + ", table=" + action.getTableName() + ")");
@@ -307,12 +354,24 @@ public class PlanBuilder {
         }
     }
 
+    /**
+     * 要求字符串不为空。
+     *
+     * @param value 字符串
+     * @param message 错误消息
+     */
     private static void requireNonBlank(String value, String message) {
         if (value == null || value.isBlank()) {
             throw new TenantDiffException(ErrorCode.PARAM_INVALID, message);
         }
     }
 
+    /**
+     * 计算 SHA-256 哈希值。
+     *
+     * @param input 输入字符串
+     * @return SHA-256 哈希值
+     */
     private static String sha256Hex(String input) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
@@ -327,10 +386,17 @@ public class PlanBuilder {
         }
     }
 
+    /**
+     * 构建统计信息。
+     *
+     * @param actions 动作列表
+     * @return 统计信息
+     */
     private static ApplyStatistics buildStatistics(List<ApplyAction> actions) {
         int insertCount = 0;
         int updateCount = 0;
         int deleteCount = 0;
+        // 统计动作数量
         if (actions != null) {
             for (ApplyAction action : actions) {
                 if (action == null || action.getDiffType() == null) {
@@ -346,6 +412,7 @@ public class PlanBuilder {
             }
         }
         int total = actions == null ? 0 : actions.size();
+        // 构建统计信息
         return ApplyStatistics.builder()
             .totalActions(total)
             .estimatedAffectedRows(total)
@@ -402,6 +469,13 @@ public class PlanBuilder {
         };
     }
 
+    /**
+     * 获取动作的依赖层级。
+     *
+     * @param action 动作
+     * @param isDelete 是否是删除动作
+     * @return 依赖层级
+     */
     private static int dependencyValue(ApplyAction action, boolean isDelete) {
         if (action == null || action.getDependencyLevel() == null) {
             return isDelete ? Integer.MIN_VALUE : Integer.MAX_VALUE;
@@ -413,6 +487,13 @@ public class PlanBuilder {
         return value == null ? "" : value;
     }
 
+    /**
+     * 安全比较两个字符串。
+     *
+     * @param a 字符串 a
+     * @param b 字符串 b
+     * @return 比较结果
+     */
     private static int safeCompare(String a, String b) {
         return Objects.toString(a, "").compareTo(Objects.toString(b, ""));
     }

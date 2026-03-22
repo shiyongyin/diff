@@ -5,6 +5,7 @@ import com.diff.core.spi.apply.BusinessApplySupport;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 /**
  * 示例插件注册配置。
@@ -28,7 +29,9 @@ public class ExamplePluginConfiguration {
     }
 
     @Bean
-    public BusinessApplySupport exampleOrderApplySupport(ObjectMapper objectMapper, ExampleOrderPlugin plugin) {
-        return new ExampleOrderApplySupport(objectMapper, plugin.schema());
+    public BusinessApplySupport exampleOrderApplySupport(ObjectMapper objectMapper,
+                                                         ExampleOrderPlugin plugin,
+                                                         JdbcTemplate jdbcTemplate) {
+        return new ExampleOrderApplySupport(objectMapper, plugin.schema(), jdbcTemplate);
     }
 }

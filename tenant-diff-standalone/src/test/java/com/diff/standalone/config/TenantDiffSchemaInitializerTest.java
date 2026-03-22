@@ -24,6 +24,7 @@ class TenantDiffSchemaInitializerTest {
         assertTableExists(jdbc, "xai_tenant_diff_session");
         assertTableExists(jdbc, "xai_tenant_diff_result");
         assertTableExists(jdbc, "xai_tenant_diff_apply_record");
+        assertTableExists(jdbc, "xai_tenant_diff_apply_lease");
         assertTableExists(jdbc, "xai_tenant_diff_snapshot");
         assertTableExists(jdbc, "xai_tenant_diff_decision_record");
     }
@@ -54,6 +55,7 @@ class TenantDiffSchemaInitializerTest {
         JdbcTemplate jdbc = new JdbcTemplate(ds);
         assertTableExists(jdbc, "custom_diff_session");
         assertTableExists(jdbc, "custom_diff_result");
+        assertTableExists(jdbc, "custom_diff_apply_lease");
         assertTableNotExists(jdbc, "xai_tenant_diff_session");
     }
 

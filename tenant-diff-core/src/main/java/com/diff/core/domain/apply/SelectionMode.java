@@ -14,7 +14,7 @@ package com.diff.core.domain.apply;
 public enum SelectionMode {
     /** 全量执行（向后兼容默认值）。 */
     ALL,
-    /** 仅执行 selectedActionIds 指定项（V1 仅支持主表动作）。 */
+    /** 仅执行 selectedActionIds 指定项。 */
     PARTIAL
 }
 

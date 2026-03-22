@@ -1,5 +1,9 @@
 package com.diff.standalone.plugin;
 
+import lombok.extern.slf4j.Slf4j;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -20,6 +24,7 @@ import java.util.Map;
  * @author tenant-diff
  * @since 2026-01-20
  */
+@Slf4j
 public class StandalonePluginRegistry {
     private final Map<String, StandaloneBusinessTypePlugin> pluginsByType;
 
@@ -40,6 +45,7 @@ public class StandalonePluginRegistry {
                 if (type == null || type.isBlank()) {
                     throw new IllegalStateException("StandaloneBusinessTypePlugin.businessType() must not be blank");
                 }
+                warnIfPotentiallyStateful(plugin);
                 if (map.putIfAbsent(type, plugin) != null) {
                     throw new IllegalStateException("Duplicate plugin for businessType=" + type);
                 }
@@ -71,5 +77,16 @@ public class StandalonePluginRegistry {
     public Map<String, StandaloneBusinessTypePlugin> all() {
         return pluginsByType;
     }
-}
 
+    private static void warnIfPotentiallyStateful(StandaloneBusinessTypePlugin plugin) {
+        Class<?> type = plugin.getClass();
+        for (Field field : type.getDeclaredFields()) {
+            int modifiers = field.getModifiers();
+            if (field.isSynthetic() || Modifier.isStatic(modifiers) || Modifier.isFinal(modifiers) || Modifier.isVolatile(modifiers)) {
+                continue;
+            }
+            log.warn("插件可能包含可变成员字段，需自行保证线程安全: pluginClass={}, field={}",
+                type.getName(), field.getName());
+        }
+    }
+}

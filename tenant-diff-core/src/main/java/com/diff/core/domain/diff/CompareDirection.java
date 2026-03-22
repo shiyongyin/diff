@@ -19,7 +19,9 @@ import com.fasterxml.jackson.annotation.JsonValue;
  * @since 1.0.0
  */
 public enum CompareDirection {
+    /** A（源）→ B（目标）。 */
     A_TO_B,
+    /** B（目标）→ A（源）。 */
     B_TO_A;
 
     /**

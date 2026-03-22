@@ -39,12 +39,16 @@ import java.util.Set;
  */
 @Slf4j
 public class TenantDiffSchemaInitializer implements InitializingBean {
-
+    /** 脚本位置模式。 */
     private static final String SCRIPT_LOCATION_PATTERN = "META-INF/tenant-diff/schema-%s.sql";
+    /** 嵌入式数据库集合。 */
     private static final Set<String> EMBEDDED_DATABASES = Set.of("h2", "hsql", "hsqldb", "derby");
 
+    /** 数据源。 */
     private final DataSource dataSource;
+    /** 表前缀。 */
     private final String tablePrefix;
+    /** 是否仅对嵌入式数据库初始化。 */
     private final boolean embeddedOnly;
 
     public TenantDiffSchemaInitializer(DataSource dataSource,
@@ -55,6 +59,9 @@ public class TenantDiffSchemaInitializer implements InitializingBean {
         this.embeddedOnly = embeddedOnly;
     }
 
+    /**
+     * 初始化 Schema。
+     */
     @Override
     public void afterPropertiesSet() {
         String productName = detectDatabaseProduct();
@@ -63,27 +70,35 @@ public class TenantDiffSchemaInitializer implements InitializingBean {
             return;
         }
 
+        // 解析数据库方言
         String dialect = resolveDialect(productName);
+        // 构建脚本路径
         String scriptPath = String.format(SCRIPT_LOCATION_PATTERN, dialect);
+        // 加载脚本资源
         ClassPathResource resource = new ClassPathResource(scriptPath);
-
+        // 如果脚本资源不存在 则跳过初始化
         if (!resource.exists()) {
             log.warn("未找到建表脚本: {}，跳过 Schema 初始化", scriptPath);
             return;
         }
-
+        // 记录日志
         log.info("执行 tenant-diff 建表脚本: {} (database={}, tablePrefix={})",
             scriptPath, productName, tablePrefix);
-
+        // 是否需要替换表前缀
         boolean needPrefixReplace = !TenantDiffTableNames.BUILT_IN_PREFIX.equals(tablePrefix);
-
+        // 获取数据库连接
         try (Connection conn = dataSource.getConnection()) {
+            // 如果需要替换表前缀 则加载脚本并替换表前缀
             if (needPrefixReplace) {
+                // 加载脚本
                 String script = loadScriptText(resource);
+                // 替换表前缀
                 script = script.replace(TenantDiffTableNames.BUILT_IN_PREFIX, tablePrefix);
+                // 执行 SQL 脚本
                 ScriptUtils.executeSqlScript(conn, new org.springframework.core.io.ByteArrayResource(
                     script.getBytes(StandardCharsets.UTF_8)));
             } else {
+                // 执行 SQL 脚本
                 ScriptUtils.executeSqlScript(conn, resource);
             }
         } catch (SQLException e) {
@@ -93,6 +108,12 @@ public class TenantDiffSchemaInitializer implements InitializingBean {
         log.info("tenant-diff 建表脚本执行完成");
     }
 
+    /**
+     * 加载脚本文本。
+     *
+     * @param resource 脚本资源
+     * @return 脚本文本
+     */
     private static String loadScriptText(ClassPathResource resource) {
         try (Reader reader = new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8)) {
             StringBuilder sb = new StringBuilder();
@@ -107,6 +128,11 @@ public class TenantDiffSchemaInitializer implements InitializingBean {
         }
     }
 
+    /**
+     * 检测数据库产品。
+     *
+     * @return 数据库产品
+     */
     private String detectDatabaseProduct() {
         try (Connection conn = dataSource.getConnection()) {
             DatabaseMetaData meta = conn.getMetaData();
@@ -117,10 +143,17 @@ public class TenantDiffSchemaInitializer implements InitializingBean {
         }
     }
 
+    /**
+     * 判断是否为嵌入式数据库。
+     *
+     * @param productName 数据库产品名
+     * @return 是否为嵌入式数据库
+     */
     private static boolean isEmbeddedDatabase(String productName) {
         if (productName == null) {
             return false;
         }
+        // 转换为小写
         String lower = productName.toLowerCase(Locale.ROOT);
         return EMBEDDED_DATABASES.stream().anyMatch(lower::contains);
     }
@@ -129,16 +162,20 @@ public class TenantDiffSchemaInitializer implements InitializingBean {
      * 将数据库产品名映射为 DDL 脚本方言后缀。
      */
     private static String resolveDialect(String productName) {
+        // 如果产品名为空 则返回 mysql
         if (productName == null) {
             return "mysql";
         }
         String lower = productName.toLowerCase(Locale.ROOT);
+        // 判断是否为嵌入式数据库
         if (lower.contains("h2") || lower.contains("hsql") || lower.contains("derby")) {
             return "h2";
         }
+        // 判断是否为 PostgreSQL 数据库
         if (lower.contains("postgre")) {
             return "postgresql";
         }
+        // 返回 MySQL 数据库
         return "mysql";
     }
 }

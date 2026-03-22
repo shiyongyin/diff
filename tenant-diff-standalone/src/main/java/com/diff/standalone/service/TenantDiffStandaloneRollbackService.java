@@ -21,15 +21,19 @@ import com.diff.standalone.web.dto.response.TenantDiffRollbackResponse;
  * @since 2026-01-20
  */
 public interface TenantDiffStandaloneRollbackService {
+    default TenantDiffRollbackResponse rollback(Long applyId) {
+        return rollback(applyId, false);
+    }
+
     /**
      * 回滚指定的 Apply 操作。
      *
      * @param applyId Apply 记录 ID（对应 apply_record 表主键）
+     * @param acknowledgeDrift 是否显式确认“目标数据已在 Apply 后发生漂移”
      * @return 回滚执行结果（含 applyResult、affectedRows 等）
      * @throws IllegalArgumentException applyId 为空
      * @throws com.diff.core.domain.exception.TenantDiffException 记录不存在、已回滚、非 SUCCESS 状态、
      *         并发冲突或数据源不支持回滚
      */
-    TenantDiffRollbackResponse rollback(Long applyId);
+    TenantDiffRollbackResponse rollback(Long applyId, boolean acknowledgeDrift);
 }
-

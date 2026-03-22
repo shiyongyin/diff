@@ -101,6 +101,7 @@ public class TenantDiffEngine {
         List<BusinessData> targets = tenantBModels == null ? Collections.emptyList() : tenantBModels;
         DiffRules effectiveRules = rules == null ? DiffRules.defaults() : rules;
 
+        // 创建目标业务数据映射
         Map<String, BusinessData> targetMap = new HashMap<>();
         for (BusinessData target : targets) {
             if (target == null) {
@@ -113,6 +114,7 @@ public class TenantDiffEngine {
         List<BusinessDiff> results = new ArrayList<>();
         StatsAccumulator overallStats = new StatsAccumulator();
 
+        // 对比业务数据
         for (BusinessData source : sources) {
             if (source == null) {
                 continue;
@@ -124,25 +126,42 @@ public class TenantDiffEngine {
             overallStats.add(diff.getStatistics());
         }
 
+        // 对比额外目标业务数据
         for (BusinessData extraTarget : targetMap.values()) {
             BusinessDiff diff = compareBusiness(null, extraTarget, effectiveRules);
             results.add(diff);
             overallStats.add(diff.getStatistics());
         }
 
+        // 设置总业务数
         overallStats.totalBusinesses = results.size();
         return new CompareResult(results, overallStats.build());
     }
 
+    /**
+     * 统计累加器。
+     */
     private static final class StatsAccumulator {
+        /** 总业务数。 */
         int totalBusinesses;
+        /** 总表数。 */
         int totalTables;
+        /** 总记录数。 */
         int totalRecords;
+        /** INSERT 动作数量。 */
         int insertCount;
+        /** UPDATE 动作数量。 */
         int updateCount;
+        /** DELETE 动作数量。 */
         int deleteCount;
+        /** NOOP 动作数量。 */
         int noopCount;
 
+        /**
+         * 添加统计信息。
+         *
+         * @param delta 统计信息，允许 {@code null}（视为空统计）
+         */
         void add(DiffStatistics delta) {
             if (delta == null) {
                 return;
@@ -156,6 +175,11 @@ public class TenantDiffEngine {
             noopCount += delta.getNoopCount() == null ? 0 : delta.getNoopCount();
         }
 
+        /**
+         * 构建统计信息。
+         *
+         * @return 统计信息，永不为 {@code null}
+         */
         DiffStatistics build() {
             return DiffStatistics.builder()
                 .totalBusinesses(totalBusinesses)
@@ -169,6 +193,14 @@ public class TenantDiffEngine {
         }
     }
 
+    /**
+     * 对比业务数据。
+     *
+     * @param source 源业务数据，允许 {@code null}（视为空业务）
+     * @param target 目标业务数据，允许 {@code null}（视为空业务）
+     * @param rules 对比规则，允许 {@code null}（内部回退到 {@link DiffRules#defaults()}）
+     * @return 业务差异明细，永不为 {@code null}
+     */
     private BusinessDiff compareBusiness(BusinessData source, BusinessData target, DiffRules rules) {
         BusinessData base = source != null ? source : target;
         List<TableDiff> tableDiffs = compareTables(
@@ -191,6 +223,13 @@ public class TenantDiffEngine {
             .build();
     }
 
+    /**
+     * 解析业务差异类型。
+     *
+     * @param source 源业务数据，允许 {@code null}（视为空业务）
+     * @param target 目标业务数据，允许 {@code null}（视为空业务）
+     * @return 业务差异类型，永不为 {@code null}
+     */
     private static DiffType resolveBusinessDiffType(BusinessData source, BusinessData target) {
         if (source != null && target == null) {
             return DiffType.BUSINESS_INSERT;
@@ -215,6 +254,7 @@ public class TenantDiffEngine {
         tableNames.addAll(sourceMap.keySet());
         tableNames.addAll(targetMap.keySet());
 
+        // 对比表数据
         List<TableDiff> diffs = new ArrayList<>();
         for (String tableName : tableNames) {
             TableData s = sourceMap.get(tableName);
@@ -230,11 +270,19 @@ public class TenantDiffEngine {
         return diffs;
     }
 
+    /**
+     * 将表数据列表转换为表数据映射。
+     *
+     * @param tables 表数据列表，允许 {@code null}（视为空列表）
+     * @return 表数据映射，永不为 {@code null}
+     */
     private static Map<String, TableData> toTableMap(List<TableData> tables) {
         if (tables == null || tables.isEmpty()) {
             return Collections.emptyMap();
         }
         Map<String, TableData> map = new HashMap<>();
+
+        // 将表数据列表转换为表数据映射
         for (TableData table : tables) {
             if (table == null || table.getTableName() == null) {
                 continue;
@@ -244,9 +292,19 @@ public class TenantDiffEngine {
         return map;
     }
 
+    /**
+     * 对比表数据。
+     *
+     * @param tableName 表名
+     * @param source 源表数据，允许 {@code null}（视为空表）
+     * @param target 目标表数据，允许 {@code null}（视为空表）
+     * @param rules 对比规则，允许 {@code null}（内部回退到 {@link DiffRules#defaults()}）
+     * @return 表差异明细，永不为 {@code null}
+     */
     private TableDiff compareTable(String tableName, TableData source, TableData target, DiffRules rules) {
         Integer dependencyLevel = source != null ? source.getDependencyLevel() : (target != null ? target.getDependencyLevel() : null);
 
+        // 对比记录数据
         List<RecordDiff> recordDiffs = compareRecords(
             tableName,
             source == null ? null : source.getRecords(),
@@ -254,7 +312,9 @@ public class TenantDiffEngine {
             rules
         );
 
+        // 构建表差异统计
         TableDiff.TableDiffCounts counts = buildCounts(recordDiffs);
+        // 构建表差异类型
         DiffType tableDiffType;
         if (source != null && target == null) {
             tableDiffType = DiffType.TABLE_INSERT;
@@ -264,6 +324,7 @@ public class TenantDiffEngine {
             tableDiffType = null;
         }
 
+        // 构建表差异明细
         return TableDiff.builder()
             .tableName(tableName)
             .dependencyLevel(dependencyLevel)
@@ -282,7 +343,7 @@ public class TenantDiffEngine {
     private List<RecordDiff> compareRecords(String tableName, List<RecordData> sourceRecords, List<RecordData> targetRecords, DiffRules rules) {
         List<RecordData> sources = sourceRecords == null ? Collections.emptyList() : sourceRecords;
         List<RecordData> targets = targetRecords == null ? Collections.emptyList() : targetRecords;
-
+        // 创建目标记录数据映射
         Map<String, RecordData> targetMap = new HashMap<>();
         for (RecordData target : targets) {
             if (target == null || target.getBusinessKey() == null) {
@@ -290,10 +351,10 @@ public class TenantDiffEngine {
             }
             targetMap.putIfAbsent(target.getBusinessKey(), target);
         }
-
+        // 创建记录差异列表
         List<RecordDiff> diffs = new ArrayList<>();
         Set<String> ignoreFields = rules.ignoreFieldsForTable(tableName);
-
+        // 对比记录数据
         for (RecordData source : sources) {
             if (source == null || source.getBusinessKey() == null) {
                 continue;
@@ -302,10 +363,12 @@ public class TenantDiffEngine {
             diffs.add(compareRecord(source, target, ignoreFields));
         }
 
+        // 对比额外目标记录数据
         for (RecordData extraTarget : targetMap.values()) {
             diffs.add(compareRecord(null, extraTarget, ignoreFields));
         }
 
+        // 按记录业务键排序 便于 Apply 阶段按序执行
         diffs.sort(Comparator.comparing(d -> d.getRecordBusinessKey() == null ? "" : d.getRecordBusinessKey()));
         return diffs;
     }
@@ -352,6 +415,7 @@ public class TenantDiffEngine {
                 .warnings(null)
                 .build();
         }
+        // source 或 target 为空：表示需要跳过对比
         if (source == null || target == null) {
             return RecordDiff.builder()
                 .recordBusinessKey(null)
@@ -381,9 +445,10 @@ public class TenantDiffEngine {
                 .warnings(null)
                 .build();
         }
-
+        // 比较字段差异
         List<FieldDiff> fieldDiffs = compareFields(source.getFields(), target.getFields(), ignoreFields);
         DiffType diffType = fieldDiffs.isEmpty() ? DiffType.NOOP : DiffType.UPDATE;
+        // 构建记录差异明细
         return RecordDiff.builder()
             .recordBusinessKey(source.getBusinessKey())
             .diffType(diffType)
@@ -396,6 +461,14 @@ public class TenantDiffEngine {
             .build();
     }
 
+    /**
+     * 比较字段差异。
+     *
+     * @param sourceFields 源字段，允许 {@code null}（视为空字段）
+     * @param targetFields 目标字段，允许 {@code null}（视为空字段）
+     * @param ignoreFields 忽略字段，允许 {@code null}（视为空集合）
+     * @return 字段差异列表，永不为 {@code null}
+     */
     private static List<FieldDiff> compareFields(Map<String, Object> sourceFields, Map<String, Object> targetFields, Set<String> ignoreFields) {
         Map<String, Object> src = sourceFields == null ? Collections.emptyMap() : sourceFields;
         Map<String, Object> tgt = targetFields == null ? Collections.emptyMap() : targetFields;
@@ -403,11 +476,13 @@ public class TenantDiffEngine {
         Set<String> keys = new HashSet<>();
         keys.addAll(src.keySet());
         keys.addAll(tgt.keySet());
+        // 移除忽略字段
         keys.removeAll(ignoreFields == null ? Collections.emptySet() : ignoreFields);
 
         List<String> sortedKeys = new ArrayList<>(keys);
+        // 按字段名排序
         sortedKeys.sort(Comparator.naturalOrder());
-
+        // 构建字段差异列表
         List<FieldDiff> diffs = new ArrayList<>();
         for (String key : sortedKeys) {
             Object s = src.get(key);
@@ -415,6 +490,7 @@ public class TenantDiffEngine {
             if (Objects.equals(s, t)) {
                 continue;
             }
+            // 构建字段差异明细
             diffs.add(FieldDiff.builder()
                 .fieldName(key)
                 .sourceValue(s)
@@ -425,11 +501,18 @@ public class TenantDiffEngine {
         return diffs;
     }
 
+    /**
+     * 差异类型计数器。
+     */
     private static final class DiffTypeCounts {
-        private int insert;
+        /** INSERT 动作数量。 */
+        int insert;
+        /** UPDATE 动作数量。 */
         private int update;
+        /** DELETE 动作数量。 */
         private int delete;
-        private int noop;
+        /** NOOP 动作数量。 */
+        int noop;
 
         private void add(DiffType diffType) {
             if (diffType == null) {
@@ -446,8 +529,15 @@ public class TenantDiffEngine {
         }
     }
 
+    /**
+     * 构建表差异统计。
+     *
+     * @param recordDiffs 记录差异列表，允许 {@code null}（视为空列表）
+     * @return 表差异统计，永不为 {@code null}
+     */
     private static TableDiff.TableDiffCounts buildCounts(List<RecordDiff> recordDiffs) {
         DiffTypeCounts counts = new DiffTypeCounts();
+        // 统计记录差异类型
         if (recordDiffs != null) {
             for (RecordDiff diff : recordDiffs) {
                 if (diff == null || diff.getDiffType() == null) {
@@ -456,6 +546,7 @@ public class TenantDiffEngine {
                 counts.add(diff.getDiffType());
             }
         }
+        // 构建表差异统计
         return TableDiff.TableDiffCounts.builder()
             .insertCount(counts.insert)
             .updateCount(counts.update)
@@ -464,16 +555,23 @@ public class TenantDiffEngine {
             .build();
     }
 
+    /**
+     * 构建表差异统计。
+     *
+     * @param tableDiffs 表差异列表，允许 {@code null}（视为空列表）
+     * @return 表差异统计，永不为 {@code null}
+     */
     private static DiffStatistics buildStatistics(List<TableDiff> tableDiffs) {
         int totalTables = tableDiffs == null ? 0 : tableDiffs.size();
         int totalRecords = 0;
         DiffTypeCounts counts = new DiffTypeCounts();
-
+        // 统计表差异类型
         if (tableDiffs != null) {
             for (TableDiff tableDiff : tableDiffs) {
                 if (tableDiff == null || tableDiff.getRecordDiffs() == null) {
                     continue;
                 }
+                // 统计记录差异类型
                 for (RecordDiff recordDiff : tableDiff.getRecordDiffs()) {
                     if (recordDiff == null || recordDiff.getDiffType() == null) {
                         continue;
@@ -484,6 +582,7 @@ public class TenantDiffEngine {
             }
         }
 
+        // 构建表差异统计
         return DiffStatistics.builder()
             .totalBusinesses(0)
             .totalTables(totalTables)
@@ -508,6 +607,13 @@ public class TenantDiffEngine {
             + businessKey.length() + ":" + businessKey;
     }
 
+    /**
+     * 计算记录指纹。
+     *
+     * @param record 记录数据，允许 {@code null}（视为空记录）
+     * @param ignoreFields 忽略字段，允许 {@code null}（视为空集合）
+     * @return 记录指纹，永不为 {@code null}
+     */
     private static String fingerprintOrCompute(RecordData record, Set<String> ignoreFields) {
         String fp = record.getFingerprint();
         if (fp != null && !fp.isBlank()) {
@@ -547,6 +653,12 @@ public class TenantDiffEngine {
         return md5Hex(content.toString());
     }
 
+    /**
+     * 计算 MD5 指纹。
+     *
+     * @param content 内容
+     * @return MD5 指纹，永不为 {@code null}
+     */
     private static String md5Hex(String content) {
         try {
             MessageDigest md5 = MessageDigest.getInstance("MD5");

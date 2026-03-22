@@ -23,6 +23,7 @@ public final class TenantDiffTableNames {
     public static final String SESSION = BUILT_IN_PREFIX + "session";
     public static final String RESULT = BUILT_IN_PREFIX + "result";
     public static final String APPLY_RECORD = BUILT_IN_PREFIX + "apply_record";
+    public static final String APPLY_LEASE = BUILT_IN_PREFIX + "apply_lease";
     public static final String SNAPSHOT = BUILT_IN_PREFIX + "snapshot";
     public static final String DECISION_RECORD = BUILT_IN_PREFIX + "decision_record";
 
@@ -30,6 +31,7 @@ public final class TenantDiffTableNames {
         SESSION,
         RESULT,
         APPLY_RECORD,
+        APPLY_LEASE,
         SNAPSHOT,
         DECISION_RECORD
     );
@@ -55,7 +57,7 @@ public final class TenantDiffTableNames {
     /**
      * 判断给定表名是否属于框架托管表。
      *
-     * <p>仅 5 张框架元数据表参与前缀映射，业务表和插件自定义表保持原样。</p>
+     * <p>仅框架元数据表参与前缀映射，业务表和插件自定义表保持原样。</p>
      *
      * @param tableName 逻辑表名
      * @return true 表示需要参与前缀映射

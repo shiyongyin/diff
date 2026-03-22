@@ -31,12 +31,22 @@ public class TenantDiffStandaloneDecisionController {
 
     private final DecisionRecordService decisionRecordService;
 
+    /**
+     * 仅依赖 {@link DecisionRecordService} 的构造函数，保证控制器职责聚焦在 HTTP-REST 转换上。
+     *
+     * @param decisionRecordService 决策持久化与查询逻辑所在的服务
+     */
     public TenantDiffStandaloneDecisionController(DecisionRecordService decisionRecordService) {
         this.decisionRecordService = decisionRecordService;
     }
 
     /**
      * 批量保存审查决策（upsert 语义）。
+     *
+     * <p>
+     * 会根据 {@code sessionId/businessType/businessKey} 覆盖旧决策，避免重复提交时产生冗余记录，
+     * 前端可在审核页多次提交同一 businessKey 仍保持幂等。
+     * </p>
      *
      * @param request 请求体
      * @return 实际保存的条数
@@ -54,6 +64,10 @@ public class TenantDiffStandaloneDecisionController {
 
     /**
      * 查询指定业务对象的所有决策记录。
+     *
+     * <p>
+     * 返回的历史记录可用于支持“查看已决策记录”页，或者在后续 Apply 中复核审查轨迹。
+     * </p>
      *
      * @param sessionId    会话 ID
      * @param businessType 业务类型

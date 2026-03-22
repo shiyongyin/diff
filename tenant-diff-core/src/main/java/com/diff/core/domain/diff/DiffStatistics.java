@@ -34,30 +34,37 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class DiffStatistics {
+    /** 总业务数。 */
     @JsonProperty("totalBusinesses")
     @Builder.Default
     private Integer totalBusinesses = 0;
 
+    /** 总表数。 */
     @JsonProperty("totalTables")
     @Builder.Default
     private Integer totalTables = 0;
 
+    /** 总记录数。 */
     @JsonProperty("totalRecords")
     @Builder.Default
     private Integer totalRecords = 0;
 
+    /** INSERT 动作数量。 */
     @JsonProperty("insertCount")
     @Builder.Default
     private Integer insertCount = 0;
 
+    /** UPDATE 动作数量。 */
     @JsonProperty("updateCount")
     @Builder.Default
     private Integer updateCount = 0;
 
+    /** DELETE 动作数量。 */
     @JsonProperty("deleteCount")
     @Builder.Default
     private Integer deleteCount = 0;
 
+    /** NOOP 动作数量。 */
     @JsonProperty("noopCount")
     @Builder.Default
     private Integer noopCount = 0;

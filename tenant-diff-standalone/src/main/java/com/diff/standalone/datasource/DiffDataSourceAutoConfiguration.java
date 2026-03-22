@@ -32,6 +32,16 @@ import javax.sql.DataSource;
 @EnableConfigurationProperties(DiffDataSourceProperties.class)
 public class DiffDataSourceAutoConfiguration {
 
+    /**
+     * 创建 {@link DiffDataSourceRegistry} 并注册配置中的外部数据源。
+     *
+     * <p>主数据源由 Spring 容器管理，其余命名数据源用 {@link HikariDataSource} 包装并注册，
+     * 启动期间即验证连接，异常会阻止应用启动。</p>
+     *
+     * @param primaryDataSource 主数据源
+     * @param properties 外部数据源配置
+     * @return 已初始化的 {@link DiffDataSourceRegistry}
+     */
     @Bean
     @ConditionalOnMissingBean
     public DiffDataSourceRegistry diffDataSourceRegistry(
@@ -55,6 +65,13 @@ public class DiffDataSourceAutoConfiguration {
         return registry;
     }
 
+    /**
+     * 基于配置构造 Hikari 数据源并强制采用 fail-fast 策略。
+     *
+     * @param key 数据源 key，主要用于日志
+     * @param config 数据源配置
+     * @return 初始化完成的 {@link HikariDataSource}
+     */
     private static HikariDataSource createDataSource(
             String key, DiffDataSourceProperties.DiffDataSourceConfig config) {
         HikariConfig hikari = new HikariConfig();

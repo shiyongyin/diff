@@ -40,12 +40,18 @@ import java.util.Map;
  * @since 2026-01-20
  */
 public abstract class AbstractSchemaBusinessApplySupport implements BusinessApplySupport {
+    /** 租户 ID 字段名。 */
     protected static final String COL_TENANTSID = "tenantsid";
+    /** 主业务键字段名。 用于跨租户对齐时标识主记录归属 */
     protected static final String COL_MAIN_BUSINESS_KEY = DerivedFieldNames.MAIN_BUSINESS_KEY;
+    /** 父业务键字段名。 用于子表记录关联父记录的业务键 */
     protected static final String COL_PARENT_BUSINESS_KEY = DerivedFieldNames.PARENT_BUSINESS_KEY;
 
+    /** 业务 Schema。 用于存储业务 Schema */
     private final BusinessSchema schema;
+    /** 子表关系映射。 用于存储子表关系映射 */
     private final Map<String, BusinessSchema.TableRelation> relationByChildTable;
+    /** 对象映射器。 用于将对象转换为 JSON 字符串 */
     private final ObjectMapper objectMapper;
 
     protected AbstractSchemaBusinessApplySupport(ObjectMapper objectMapper, BusinessSchema schema) {
@@ -54,12 +60,14 @@ public abstract class AbstractSchemaBusinessApplySupport implements BusinessAppl
         }
         this.schema = schema;
         this.objectMapper = objectMapper;
+        // 初始化子表关系映射
         Map<String, BusinessSchema.TableRelation> map = new HashMap<>();
         if (schema.getRelations() != null) {
             for (BusinessSchema.TableRelation relation : schema.getRelations()) {
                 if (relation == null || relation.getChildTable() == null || relation.getChildTable().isBlank()) {
                     continue;
                 }
+                // 将子表关系映射到子表表名 
                 map.putIfAbsent(relation.getChildTable(), relation);
             }
         }
@@ -114,6 +122,9 @@ public abstract class AbstractSchemaBusinessApplySupport implements BusinessAppl
             if (parentBusinessKey != null && !parentBusinessKey.isBlank()) {
                 // 使用父记录的业务键从 IdMapping 获取新插入的物理 ID
                 Long newParentId = idMapping.get(relation.getParentTable(), parentBusinessKey);
+                if (newParentId == null) {
+                    newParentId = locateTargetId(relation.getParentTable(), parentBusinessKey, targetTenantId);
+                }
                 if (newParentId != null) {
                     result.put(relation.getFkColumn(), newParentId);
                 }
@@ -138,7 +149,9 @@ public abstract class AbstractSchemaBusinessApplySupport implements BusinessAppl
      * @return 父记录的 businessKey，可能为 null 或空串
      */
     protected String resolveParentBusinessKey(Map<String, Object> fields) {
+        // 优先使用 parent_business_key
         String parentBusinessKey = toStringOrNull(fields.get(COL_PARENT_BUSINESS_KEY));
+        // 如果 parent_business_key 为空，则回退到 main_business_key
         if (parentBusinessKey == null || parentBusinessKey.isBlank()) {
             parentBusinessKey = toStringOrNull(fields.get(COL_MAIN_BUSINESS_KEY));
         }
@@ -210,6 +223,13 @@ public abstract class AbstractSchemaBusinessApplySupport implements BusinessAppl
         }
     }
 
+    /**
+     * 将值转换为指定类型。
+     *
+     * @param value 值
+     * @param type 类型
+     * @return 转换后的值
+     */
     private Object convertValue(Object value, String type) {
         if (value == null) {
             return null;
@@ -240,22 +260,52 @@ public abstract class AbstractSchemaBusinessApplySupport implements BusinessAppl
         return value;
     }
 
+    /**
+     * 将值转换为字符串。
+     *
+     * @param value 值
+     * @return 字符串，可能为 null
+     */
     protected static String toStringOrNull(Object value) {
         return value == null ? null : String.valueOf(value);
     }
 
+    /**
+     * 将值转换为 Long。
+     *
+     * @param value 值
+     * @return 转换后的 Long，无法转换时返回 null
+     */
     protected static Long toLong(Object value) {
         return TypeConversionUtil.toLong(value, true);
     }
 
+    /**
+     * 将值转换为 Integer。
+     *
+     * @param value 值
+     * @return 转换后的 Integer，无法转换时返回 null
+     */
     protected static Integer toInteger(Object value) {
         return TypeConversionUtil.toInteger(value, true, true);
     }
 
+    /**
+     * 将值转换为 BigDecimal。
+     *
+     * @param value 值
+     * @return 转换后的 BigDecimal，无法转换时返回 null
+     */
     protected static BigDecimal toBigDecimal(Object value) {
         return TypeConversionUtil.toBigDecimal(value);
     }
 
+    /**
+     * 将值转换为 LocalDateTime。
+     *
+     * @param value 值
+     * @return 转换后的 LocalDateTime，无法转换时返回 null
+     */
     protected static LocalDateTime toLocalDateTime(Object value) {
         return TypeConversionUtil.toLocalDateTime(value, true);
     }

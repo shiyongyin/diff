@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS xai_tenant_diff_session (
     options_json    TEXT,
     status          VARCHAR(32),
     error_msg       TEXT,
+    warning_json    TEXT,
     version         INT DEFAULT 0,
     created_at      DATETIME,
     finished_at     DATETIME
@@ -32,18 +33,38 @@ CREATE TABLE IF NOT EXISTS xai_tenant_diff_result (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='租户差异比对结果';
 
 CREATE TABLE IF NOT EXISTS xai_tenant_diff_apply_record (
-    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
-    apply_key   VARCHAR(64),
-    session_id  BIGINT,
-    direction   VARCHAR(32),
-    plan_json   TEXT,
-    status      VARCHAR(32),
-    error_msg   TEXT,
-    version     INT DEFAULT 0,
-    started_at  DATETIME,
-    finished_at DATETIME,
+    id                   BIGINT AUTO_INCREMENT PRIMARY KEY,
+    apply_key            VARCHAR(64),
+    session_id           BIGINT,
+    target_tenant_id     BIGINT,
+    target_data_source_key VARCHAR(64),
+    direction            VARCHAR(32),
+    plan_json            TEXT,
+    status               VARCHAR(32),
+    error_msg            TEXT,
+    failure_stage        VARCHAR(64),
+    failure_action_id    VARCHAR(512),
+    diagnostics_json     TEXT,
+    version              INT DEFAULT 0,
+    started_at           DATETIME,
+    finished_at          DATETIME,
+    verify_status        VARCHAR(32),
+    verify_json          TEXT,
     INDEX idx_session_id (session_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='差异Apply执行记录';
+
+CREATE TABLE IF NOT EXISTS xai_tenant_diff_apply_lease (
+    id                     BIGINT AUTO_INCREMENT PRIMARY KEY,
+    target_tenant_id       BIGINT NOT NULL,
+    target_data_source_key VARCHAR(64) NOT NULL,
+    session_id             BIGINT NOT NULL,
+    apply_id               BIGINT NULL,
+    lease_token            VARCHAR(64) NOT NULL,
+    leased_at              DATETIME NOT NULL,
+    expires_at             DATETIME NOT NULL,
+    UNIQUE KEY uk_apply_lease_target (target_tenant_id, target_data_source_key),
+    UNIQUE KEY uk_apply_lease_token (lease_token)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Apply 目标租户互斥租约';
 
 CREATE TABLE IF NOT EXISTS xai_tenant_diff_snapshot (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,

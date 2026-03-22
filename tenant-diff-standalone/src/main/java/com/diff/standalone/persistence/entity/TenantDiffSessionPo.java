@@ -27,18 +27,23 @@ import java.time.LocalDateTime;
 @TableName("xai_tenant_diff_session")
 public class TenantDiffSessionPo {
 
+    /** Session 表自增主键。 */
     @TableId(value = "id", type = IdType.AUTO)
     private Long id;
 
+    /** Diff 会话的唯一 key，便于跨服务关联。 */
     @TableField("session_key")
     private String sessionKey;
 
+    /** 源端租户 ID。 */
     @TableField("source_tenant_id")
     private Long sourceTenantId;
 
+    /** 目标端租户 ID。 */
     @TableField("target_tenant_id")
     private Long targetTenantId;
 
+    /** 记录传入的 scope JSON（包括 businessTypes、filters 等）。 */
     @TableField("scope_json")
     private String scopeJson;
 
@@ -51,6 +56,9 @@ public class TenantDiffSessionPo {
     @TableField("error_msg")
     private String errorMsg;
 
+    @TableField("warning_json")
+    private String warningJson;
+
     @TableField("created_at")
     private LocalDateTime createdAt;
 
@@ -61,4 +69,3 @@ public class TenantDiffSessionPo {
     @TableField("finished_at")
     private LocalDateTime finishedAt;
 }
-

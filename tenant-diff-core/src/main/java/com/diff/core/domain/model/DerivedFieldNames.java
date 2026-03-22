@@ -24,7 +24,9 @@ package com.diff.core.domain.model;
  * @since 1.0.0
  */
 public final class DerivedFieldNames {
+    /** 主业务键。 用于跨租户对齐时标识主记录归属 */
     public static final String MAIN_BUSINESS_KEY = "main_business_key";
+    /** 父业务键。 用于子表记录关联父记录的业务键 */
     public static final String PARENT_BUSINESS_KEY = "parent_business_key";
 
     private DerivedFieldNames() {

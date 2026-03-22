@@ -38,8 +38,10 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.time.LocalDateTime;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -115,6 +117,9 @@ class TenantDiffStandaloneApplySelectionIntegrationTest {
     @Autowired
     private com.diff.core.apply.PlanBuilder planBuilder;
 
+    @Autowired
+    private PlatformTransactionManager transactionManager;
+
     @BeforeEach
     void resetRecordingExecutor() {
         recordingExecutor.reset();
@@ -141,7 +146,7 @@ class TenantDiffStandaloneApplySelectionIntegrationTest {
 
         JsonNode root = objectMapper.readTree(previewResult.getResponse().getContentAsString());
         String token = root.path("data").path("previewToken").asText();
-        assertTrue(token.startsWith("pt_v1_"));
+        assertTrue(token.startsWith("pt_v2_"));
 
         ArrayNode actions = (ArrayNode) root.path("data").path("actions");
         assertEquals(3, actions.size());
@@ -209,6 +214,31 @@ class TenantDiffStandaloneApplySelectionIntegrationTest {
             .andExpect(status().is(422))
             .andExpect(jsonPath("$.success").value(false))
             .andExpect(jsonPath("$.code").value("DIFF_E_2012"));
+
+        assertEquals(0, recordingExecutor.getCallCount());
+    }
+
+    @Test
+    void execute_partial_expiredPreviewToken_returnsPreviewTokenExpired() throws Exception {
+        long sessionId = seedSessionWithDiffs(2, 0);
+        PreviewData preview = preview(sessionId);
+
+        ApplyExecuteRequest request = ApplyExecuteRequest.builder()
+            .sessionId(sessionId)
+            .direction(ApplyDirection.A_TO_B)
+            .options(ApplyOptions.builder()
+                .selectionMode(SelectionMode.PARTIAL)
+                .previewToken(expirePreviewToken(preview.previewToken))
+                .selectedActionIds(Set.of(preview.actionIds.get(0)))
+                .build())
+            .build();
+
+        mockMvc.perform(post("/api/tenantDiff/standalone/apply/execute")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+            .andExpect(status().is(422))
+            .andExpect(jsonPath("$.success").value(false))
+            .andExpect(jsonPath("$.code").value("DIFF_E_2015"));
 
         assertEquals(0, recordingExecutor.getCallCount());
     }
@@ -392,15 +422,36 @@ class TenantDiffStandaloneApplySelectionIntegrationTest {
         return new PreviewData(token, ids);
     }
 
+    private static String expirePreviewToken(String previewToken) {
+        String[] parts = previewToken.split("_", 4);
+        if (parts.length != 4) {
+            throw new IllegalArgumentException("unexpected preview token format: " + previewToken);
+        }
+        return parts[0] + "_" + parts[1] + "_1_" + parts[3];
+    }
+
     /**
      * 以自定义 previewActionLimit 构造临时 Service 实例并调用 preview。
      * 用于验证 PREVIEW_TOO_LARGE 而无需修改 Spring 容器配置。
      */
     private void previewWithLimit(long sessionId, int limit) {
+        com.diff.standalone.service.ApplyLeaseService leaseService =
+            org.mockito.Mockito.mock(com.diff.standalone.service.ApplyLeaseService.class);
+        com.diff.standalone.plugin.StandalonePluginRegistry pluginRegistry =
+            org.mockito.Mockito.mock(com.diff.standalone.plugin.StandalonePluginRegistry.class);
+        com.diff.standalone.service.DecisionRecordService decisionRecordService = null;
         com.diff.standalone.service.impl.TenantDiffStandaloneApplyServiceImpl svc =
             new com.diff.standalone.service.impl.TenantDiffStandaloneApplyServiceImpl(
                 applyRecordMapper, snapshotMapper, sessionMapper, resultMapper,
-                snapshotBuilderBean, recordingExecutor, planBuilder, objectMapper, limit, null
+                snapshotBuilderBean, recordingExecutor, new com.diff.core.engine.TenantDiffEngine(), planBuilder, objectMapper,
+                limit, Duration.ofMinutes(30), Duration.ZERO, Duration.ofMinutes(10),
+                new com.diff.standalone.service.impl.ApplyAuditServiceImpl(
+                    applyRecordMapper,
+                    transactionManager
+                ),
+                leaseService,
+                pluginRegistry,
+                decisionRecordService
             );
         svc.preview(sessionId, ApplyDirection.A_TO_B, ApplyOptions.builder().build());
     }

@@ -21,5 +21,7 @@ import lombok.NoArgsConstructor;
 public class ApplyRollbackRequest {
     @NotNull
     private Long applyId;
-}
 
+    @Builder.Default
+    private boolean acknowledgeDrift = false;
+}

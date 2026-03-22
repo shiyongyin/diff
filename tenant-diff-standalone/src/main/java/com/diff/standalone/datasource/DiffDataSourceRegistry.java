@@ -33,12 +33,24 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 public class DiffDataSourceRegistry implements DisposableBean {
 
+    /** 标识主数据源/默认数据源的 key，null 也会归一到该值。 */
     public static final String PRIMARY_KEY = "primary";
 
+    /** Spring 容器管理的主数据源，兼做默认 key 的 fallback。 */
     private final DataSource primaryDataSource;
+    /** 额外注册的命名数据源，key 为 trim 后的配置名。 */
     private final Map<String, DataSource> registry = new ConcurrentHashMap<>();
+    /** 缓存按 key 构造的 JdbcTemplate，避免重复创建。 */
     private final Map<String, JdbcTemplate> jdbcTemplateCache = new ConcurrentHashMap<>();
 
+    /**
+     * 构造注册表并绑定主数据源。
+     *
+     * <p>主数据源由 Spring 容器管理，作为默认 key（null/"primary"）的返回值；非空校验避免
+     * registry 处于不可用状态。</p>
+     *
+     * @param primaryDataSource Spring 管理的主数据源
+     */
     public DiffDataSourceRegistry(DataSource primaryDataSource) {
         if (primaryDataSource == null) {
             throw new IllegalArgumentException("primaryDataSource must not be null");

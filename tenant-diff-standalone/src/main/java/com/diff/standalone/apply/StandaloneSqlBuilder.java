@@ -36,8 +36,11 @@ import java.util.Map;
  * @since 2026-01-20
  */
 public final class StandaloneSqlBuilder {
+    /** 租户 ID 列名。 */   
     private static final String COL_TENANTSID = "tenantsid";
+    /** ID 列名。 */
     private static final String COL_ID = "id";
+ 
 
     private StandaloneSqlBuilder() {
     }
@@ -79,28 +82,34 @@ public final class StandaloneSqlBuilder {
         // 按字典序排列，保证 SQL 稳定
         cols.sort(String::compareTo);
 
+        // 构建所有列
         List<String> allCols = new ArrayList<>();
         allCols.add(COL_TENANTSID);
         allCols.addAll(cols);
 
+        // 构建 SQL
         StringBuilder sql = new StringBuilder(256);
         sql.append("INSERT INTO ").append(tableName).append(" (");
         sql.append(String.join(", ", allCols));
         sql.append(") VALUES (");
 
-        // tenantsid 固定为第一个参数
+        // tenantsid 固定为第一个参数 占位符
         sql.append("?");
         for (int i = 0; i < cols.size(); i++) {
             sql.append(", ?");
         }
         sql.append(")");
 
+        // 构建参数
         List<Object> args = new ArrayList<>();
+        // tenantsid 固定为第一个参数
         args.add(targetTenantId);
+        // 其他列按顺序添加
         for (String col : cols) {
             args.add(map.get(col));
         }
 
+        // 返回 SQL 语句与参数
         return new SqlAndArgs(sql.toString(), args.toArray());
     }
 
@@ -138,27 +147,35 @@ public final class StandaloneSqlBuilder {
             return null;
         }
 
+        // 构建 SQL
         StringBuilder sql = new StringBuilder(256);
         sql.append("UPDATE ").append(tableName).append(" SET ");
 
+        // 构建参数
         List<Object> args = new ArrayList<>();
+        // 索引 用于构建 SQL
         int idx = 0;
         for (String col : cols) {
             if (idx > 0) {
+                // 如果索引大于0 则添加逗号
                 sql.append(", ");
             }
+            // 添加列名和占位符
             sql.append(col).append(" = ?");
+            // 添加参数
             args.add(map.get(col));
             idx++;
         }
 
+        // 添加 WHERE 条件
         sql.append(" WHERE ").append(COL_TENANTSID).append(" = ?");
         args.add(targetTenantId);
         idx++;
-
+        // 添加 ID 条件
         sql.append(" AND ").append(COL_ID).append(" = ?");
         args.add(targetId);
 
+        // 返回 SQL 语句与参数
         return new SqlAndArgs(sql.toString(), args.toArray());
     }
 

@@ -3,6 +3,7 @@ package com.diff.standalone.service.impl;
 import com.diff.core.apply.PlanBuilder;
 import com.diff.core.domain.apply.*;
 import com.diff.core.domain.diff.*;
+import com.diff.core.engine.TenantDiffEngine;
 import com.diff.standalone.apply.StandaloneApplyExecutor;
 import com.diff.standalone.persistence.entity.TenantDiffDecisionRecordPo;
 import com.diff.standalone.persistence.entity.TenantDiffResultPo;
@@ -11,6 +12,9 @@ import com.diff.standalone.persistence.mapper.TenantDiffApplyRecordMapper;
 import com.diff.standalone.persistence.mapper.TenantDiffResultMapper;
 import com.diff.standalone.persistence.mapper.TenantDiffSessionMapper;
 import com.diff.standalone.persistence.mapper.TenantDiffSnapshotMapper;
+import com.diff.standalone.plugin.StandalonePluginRegistry;
+import com.diff.standalone.service.ApplyAuditService;
+import com.diff.standalone.service.ApplyLeaseService;
 import com.diff.standalone.service.DecisionRecordService;
 import com.diff.standalone.snapshot.StandaloneSnapshotBuilder;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -21,6 +25,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -41,6 +46,10 @@ class ApplyDecisionFilterTest {
     @Mock private TenantDiffResultMapper resultMapper;
     @Mock private StandaloneSnapshotBuilder snapshotBuilder;
     @Mock private StandaloneApplyExecutor applyExecutor;
+    @Mock private TenantDiffEngine diffEngine;
+    @Mock private ApplyAuditService applyAuditService;
+    @Mock private ApplyLeaseService applyLeaseService;
+    @Mock private StandalonePluginRegistry pluginRegistry;
     @Mock private DecisionRecordService decisionRecordService;
 
     private TenantDiffStandaloneApplyServiceImpl applyService;
@@ -51,8 +60,9 @@ class ApplyDecisionFilterTest {
         PlanBuilder planBuilder = new PlanBuilder();
         applyService = new TenantDiffStandaloneApplyServiceImpl(
             applyRecordMapper, snapshotMapper, sessionMapper, resultMapper,
-            snapshotBuilder, applyExecutor, planBuilder, objectMapper,
-            5000, decisionRecordService
+            snapshotBuilder, applyExecutor, diffEngine, planBuilder, objectMapper,
+            5000, Duration.ofMinutes(30), Duration.ZERO, Duration.ofMinutes(10),
+            applyAuditService, applyLeaseService, pluginRegistry, decisionRecordService
         );
     }
 
@@ -186,8 +196,9 @@ class ApplyDecisionFilterTest {
         TenantDiffStandaloneApplyServiceImpl noDecisionService =
             new TenantDiffStandaloneApplyServiceImpl(
                 applyRecordMapper, snapshotMapper, sessionMapper, resultMapper,
-                snapshotBuilder, applyExecutor, new PlanBuilder(), objectMapper,
-                5000, null
+                snapshotBuilder, applyExecutor, diffEngine, new PlanBuilder(), objectMapper,
+                5000, Duration.ofMinutes(30), Duration.ZERO, Duration.ofMinutes(10),
+                applyAuditService, applyLeaseService, pluginRegistry, null
             );
 
         TenantDiffSessionPo session = new TenantDiffSessionPo();

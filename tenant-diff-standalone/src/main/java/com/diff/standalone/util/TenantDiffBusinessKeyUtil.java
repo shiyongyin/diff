@@ -235,18 +235,51 @@ public final class TenantDiffBusinessKeyUtil {
             .build();
     }
 
+    /**
+     * 构建 API_TEMPLATE/OCR_TEMPLATE 主表的业务键，便于在跨租户 Apply 时复用。
+     *
+     * @param product      产品线
+     * @param templateName 模板名称
+     * @param doctypeno    单据类型编号
+     * @return 业务键（格式：product|||templateName|||doctypeno）
+     */
     public static String buildOcrTemplateMain(String product, String templateName, String doctypeno) {
         return String.join(DELIMITER, nullToEmpty(product), nullToEmpty(templateName), nullToEmpty(doctypeno));
     }
 
+    /**
+     * 构建 API_TEMPLATE 明细表的业务键，前缀为主表 businessKey 保持父子链路。
+     *
+     * @param mainBusinessKey 主表 businessKey（xai_api_template 主键）
+     * @param itemcode        明细项编码
+     * @param docpart         文档头/身区分
+     * @return 键值（格式：mainBusinessKey|||itemcode|||docpart）
+     */
     public static String buildOcrTemplateD(String mainBusinessKey, String itemcode, String docpart) {
         return String.join(DELIMITER, nullToEmpty(mainBusinessKey), nullToEmpty(itemcode), nullToEmpty(docpart));
     }
 
+    /**
+     * 构建 xai_api_def 表的记录业务键，包含 API 维度与项目信息。
+     *
+     * @param doctypeno 单据类型编号
+     * @param product   产品线
+     * @param docpart   单据头/身
+     * @param itemcode  API 项编码
+     * @return 记录业务键
+     */
     public static String buildApiDef(String doctypeno, String product, String docpart, String itemcode) {
         return String.join(DELIMITER, nullToEmpty(doctypeno), nullToEmpty(product), nullToEmpty(docpart), nullToEmpty(itemcode));
     }
 
+    /**
+     * 构建 xai_api_biz_d 表的记录业务键，将业务主键与 single doc 维度拼接。
+     *
+     * @param doctypeno   单据类型
+     * @param product     产品线
+     * @param businessKey 业务主键（如 xai_api_def）
+     * @return 业务键
+     */
     public static String buildApiBizD(String doctypeno, String product, String businessKey) {
         return String.join(DELIMITER, nullToEmpty(doctypeno), nullToEmpty(product), nullToEmpty(businessKey));
     }
@@ -381,4 +414,3 @@ public final class TenantDiffBusinessKeyUtil {
         return value == null ? "" : Objects.toString(value, "");
     }
 }
-

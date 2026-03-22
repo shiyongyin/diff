@@ -35,6 +35,7 @@ import java.util.Set;
 @NoArgsConstructor
 @AllArgsConstructor
 public class DiffRules {
+    /** 默认忽略字段。 */
     @Builder.Default
     private Set<String> defaultIgnoreFields = DiffDefaults.DEFAULT_IGNORE_FIELDS;
 
@@ -60,11 +61,15 @@ public class DiffRules {
      * @return 不可变的忽略字段集合，永不为 {@code null}
      */
     public Set<String> ignoreFieldsForTable(String tableName) {
+        // 获取默认忽略字段
         Set<String> defaults = defaultIgnoreFields == null ? DiffDefaults.DEFAULT_IGNORE_FIELDS : defaultIgnoreFields;
+        // 获取指定表的忽略字段
         Set<String> byTable = ignoreFieldsByTable == null ? null : ignoreFieldsByTable.get(tableName);
+        // 如果指定表的忽略字段为空，则返回默认忽略字段
         if (byTable == null || byTable.isEmpty()) {
             return defaults;
         }
+        // 合并默认忽略字段和指定表的忽略字段
         Set<String> merged = new HashSet<>(defaults);
         merged.addAll(byTable);
         return Collections.unmodifiableSet(merged);

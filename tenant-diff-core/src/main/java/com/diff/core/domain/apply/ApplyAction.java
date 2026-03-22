@@ -44,12 +44,17 @@ public class ApplyAction {
      * <p>其中 escape 规则为：先将 {@code %} 转义为 {@code %25}，再将 {@code :} 转义为 {@code %3A}。</p>
      */
     private String actionId;
+    /** 业务类型。 */
     private String businessType;
+    /** 业务键。 */
     private String businessKey;
+    /** 表名。 */
     private String tableName;
     /** 表依赖层级（冗余自 diff 结果，用于执行排序）。 */
     private Integer dependencyLevel;
+    /** 记录业务键。 */
     private String recordBusinessKey;
+    /** 操作类型。 */
     private DiffType diffType;
 
     /** v1 预留扩展载荷（保持最小且可序列化）。 */
@@ -84,7 +89,7 @@ public class ApplyAction {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException("actionId component is blank: " + fieldName);
         }
-        // Escape order matters: escape '%' first to avoid re-escaping "%3A" -> "%253A".
+        // 转义保留字符 避免歧义 转义 % 为 %25 转义 : 为 %3A
         return value.replace("%", "%25").replace(":", "%3A");
     }
 }

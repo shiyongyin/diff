@@ -50,6 +50,18 @@ class ConcurrentApplyTest {
         return sessionId;
     }
 
+    private ApplyPlan buildExecutePlan(Long sessionId) {
+        return applyService.buildPlan(
+            sessionId, ApplyDirection.A_TO_B,
+            ApplyOptions.builder()
+                .mode(ApplyMode.EXECUTE)
+                .businessTypes(List.of("EXAMPLE_PRODUCT"))
+                .diffTypes(List.of(DiffType.INSERT, DiffType.UPDATE))
+                .allowDelete(false)
+                .build()
+        );
+    }
+
     @Test
     @DisplayName("2线程同时 Apply：仅1个成功，另1个抛出 APPLY_CONCURRENT_CONFLICT")
     void concurrentApply_onlyOneSucceeds() throws Exception {
@@ -107,5 +119,62 @@ class ConcurrentApplyTest {
 
         assertEquals(1, successCount.get(), "应有且仅有 1 个线程成功执行 Apply");
         assertEquals(1, conflictCount.get(), "应有 1 个线程收到 APPLY_CONCURRENT_CONFLICT");
+    }
+
+    @Test
+    @DisplayName("不同 session 同目标租户并发 Apply：仅1个成功，另1个抛出 APPLY_TARGET_BUSY")
+    void concurrentApply_onDifferentSessionsSameTarget_onlyOneSucceeds() throws Exception {
+        Long sessionId1 = createAndCompare();
+        Long sessionId2 = createAndCompare();
+
+        ApplyPlan plan1 = buildExecutePlan(sessionId1);
+        ApplyPlan plan2 = buildExecutePlan(sessionId2);
+
+        int threadCount = 2;
+        CountDownLatch readyLatch = new CountDownLatch(threadCount);
+        CountDownLatch startLatch = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(threadCount);
+
+        AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger leaseConflictCount = new AtomicInteger(0);
+        List<Future<?>> futures = new java.util.ArrayList<>();
+
+        futures.add(executor.submit(() -> runApplyWithBarrier(plan1, readyLatch, startLatch, successCount, leaseConflictCount)));
+        futures.add(executor.submit(() -> runApplyWithBarrier(plan2, readyLatch, startLatch, successCount, leaseConflictCount)));
+
+        readyLatch.await();
+        startLatch.countDown();
+
+        for (Future<?> future : futures) {
+            future.get();
+        }
+        executor.shutdown();
+
+        assertEquals(1, successCount.get(), "应有且仅有 1 个 session 成功执行 Apply");
+        assertEquals(1, leaseConflictCount.get(), "应有 1 个 session 收到 APPLY_TARGET_BUSY");
+    }
+
+    private void runApplyWithBarrier(ApplyPlan plan,
+                                     CountDownLatch readyLatch,
+                                     CountDownLatch startLatch,
+                                     AtomicInteger successCount,
+                                     AtomicInteger leaseConflictCount) {
+        readyLatch.countDown();
+        try {
+            startLatch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+        try {
+            TenantDiffApplyExecuteResponse response = applyService.execute(plan);
+            if (response.getStatus() == ApplyRecordStatus.SUCCESS) {
+                successCount.incrementAndGet();
+            }
+        } catch (TenantDiffException e) {
+            if (e.getErrorCode() == ErrorCode.APPLY_TARGET_BUSY) {
+                leaseConflictCount.incrementAndGet();
+            }
+        }
     }
 }
