@@ -1,6 +1,6 @@
 # Tenant Diff 开发设计文档
 
-> SSOT 版本 | 最后更新：2026-03-16
+> SSOT 版本 | 最后更新：2026-03-22
 > 本文档为开发设计唯一权威源，整合了架构、设计、插件开发的所有内容。
 
 ---
@@ -13,7 +13,7 @@
 
 **解决的问题**：在多租户 SaaS 架构下，将"标准租户"（模板）的业务配置数据复制/同步到"客户租户"，支持差异预览、选择性同步和回滚。
 
-**不解决的问题**：
+**非目标（Non-goals）**：
 - 不处理运行时业务数据（订单、库存等）的同步
 - 不替代数据库级别的主从复制
 - 不提供分布式事务保障
@@ -84,8 +84,9 @@ tenant-diff.standalone.enabled=true
 +-------------------------------------------------------------+
 |                      Service Layer                           |
 |  TenantDiffStandaloneServiceImpl        (会话 + 对比编排)     |
-|  TenantDiffStandaloneApplyServiceImpl   (Apply 审计 + 快照)   |
-|  TenantDiffStandaloneRollbackServiceImpl(快照恢复回滚)        |
+|  TenantDiffStandaloneApplyServiceImpl   (Apply 编排 + 快照)   |
+|  TenantDiffStandaloneRollbackServiceImpl(快照恢复 + 漂移检测) |
+|  ApplyAuditService / ApplyLeaseService  (独立事务审计 + 租约) |
 |  DecisionRecordServiceImpl              (决策记录持久化)      |
 +-------------------------------------------------------------+
 |                      Core Engine                             |
@@ -99,6 +100,7 @@ tenant-diff.standalone.enabled=true
 +-------------------------------------------------------------+
 |                      Persistence (MyBatis-Plus)              |
 |  TenantDiffSessionPo / TenantDiffResultPo / ...             |
+|  TenantDiffApplyLeasePo                 (Apply 目标租约)     |
 |  TenantDiffSessionMapper / TenantDiffResultMapper / ...      |
 +-------------------------------------------------------------+
 |                      Infrastructure                          |
@@ -131,8 +133,9 @@ tenant-diff.standalone.enabled=true
 | `com.diff.standalone.plugin` | 业务类型插件系统（`StandaloneBusinessTypePlugin` 接口、`AbstractStandaloneBusinessPlugin` 基类、`SimpleTablePlugin` 单表快捷基类、`StandalonePluginRegistry` 注册表） |
 | `com.diff.standalone.apply` | Apply 执行器实现（`ApplyExecutorCore`、`SessionBasedApplyExecutor`、`InMemoryApplyExecutor`、`StandaloneSqlBuilder`、`BusinessApplySupportRegistry`） |
 | `com.diff.standalone.apply.support` | Apply 支持基类（`AbstractSchemaBusinessApplySupport`、`SimpleTableApplySupport`） |
-| `com.diff.standalone.service` | 服务编排层接口（含 `DecisionRecordService`） |
-| `com.diff.standalone.service.impl` | 服务编排层实现 |
+| `com.diff.standalone.model` | 结构化模型（`BuildWarning`、`SessionWarning`） |
+| `com.diff.standalone.service` | 服务编排层接口（含 `DecisionRecordService`、`ApplyAuditService`、`ApplyLeaseService`） |
+| `com.diff.standalone.service.impl` | 服务编排层实现（含 `ApplyAuditServiceImpl`、`ApplyLeaseServiceImpl`） |
 | `com.diff.standalone.service.support` | 视图辅助（`DiffViewFilter` 过滤/投影工具、`DiffDetailView` 视图模式枚举） |
 | `com.diff.standalone.persistence.entity` | MyBatis-Plus PO 实体 |
 | `com.diff.standalone.persistence.mapper` | MyBatis-Plus Mapper 接口 |
@@ -410,6 +413,8 @@ sequenceDiagram
 sequenceDiagram
     participant C as Controller
     participant AS as ApplyService
+    participant LS as LeaseService
+    participant AA as AuditService
     participant SB as SnapshotBuilder
     participant AE as ApplyExecutor
     participant SQL as SqlBuilder
@@ -422,7 +427,10 @@ sequenceDiagram
     C->>AS: execute(plan)
     AS->>AS: 乐观锁: session SUCCESS -> APPLYING
     AS->>AS: 二级防护: 检查同 session 无 SUCCESS/ROLLED_BACK 的 apply_record
-    AS->>AS: 持久化 apply_record（RUNNING）
+    AS->>LS: acquire(targetTenantId, dataSourceKey, sessionId, ttl)
+    LS-->>AS: leaseToken（获取失败抛 APPLY_TARGET_BUSY）
+    AS->>AA: createRunningRecord(REQUIRES_NEW 事务)
+    AA-->>AS: applyId（审计记录已持久化，业务失败也不丢失）
     AS->>SB: buildTargetSnapshots(applyId, session, plan)
     SB-->>AS: snapshots (TARGET 侧 apply 前快照)
     AS->>AS: 持久化 snapshots
@@ -436,8 +444,9 @@ sequenceDiagram
         AE->>AE: idMapping.put(table, businessKey, newId)
     end
     AE-->>AS: ApplyResult
-    AS->>AS: 更新 apply_record（SUCCESS/FAILED）
+    AS->>AA: updateStatus（SUCCESS/FAILED，独立事务）
     AS->>AS: 恢复 session 状态 -> SUCCESS
+    AS->>LS: release(leaseToken)
     AS-->>C: TenantDiffApplyExecuteResponse
 ```
 
@@ -454,16 +463,22 @@ sequenceDiagram
 
 4. **部分失败追踪**：执行中断时通过 `ApplyExecutionException` 携带 `partialResult`，记录已执行的行数和错误明细。
 
-5. **并发控制**：Apply 使用乐观锁（session.version）做 `SUCCESS -> APPLYING` 的 CAS 状态转换，防止同一 session 并发 Apply。同时有二级防护：检查同 session 不存在 SUCCESS/ROLLED_BACK 状态的 apply_record。
-   _代码位置_：`TenantDiffStandaloneApplyServiceImpl#doExecute(...)`
+5. **三级并发控制**（解决不同维度的并发问题）：
+   - **第一级（同 session 内）**：乐观锁（session.version）做 `SUCCESS -> APPLYING` CAS，防止同一 session 并发 Apply。
+   - **第二级（同 session 内）**：检查同 session 不存在 SUCCESS/ROLLED_BACK 状态的 apply_record，防止重复 Apply。
+   - **第三级（跨 session）**：`ApplyLeaseService` 通过数据库唯一约束（`target_tenant_id + target_data_source_key`）实现目标租户维度的互斥租约，防止不同 session 同时写入同一目标。租约默认 TTL 10 分钟，过期自动清理。获取失败抛 `APPLY_TARGET_BUSY`（`DIFF_E_2008`）。
 
-6. **Apply 失败的可观测性**：整个 execute 方法包在 `@Transactional(rollbackFor=Exception.class)` 内，失败时全部回滚（包括 apply_record 和 snapshot），保证数据一致性。**排查主信号应为应用 ERROR 日志**，而非数据库 apply_record 状态。
-   _代码位置_：`TenantDiffStandaloneApplyServiceImpl#execute(...)`
+   > **为什么需要三级**：第一级和第二级只能防止同一 session 的并发，无法阻止用户对同一目标租户创建两个 session 后同时 Apply。第三级的租约通过目标维度（tenant + dataSource）互斥，填补了这个缺口。
+
+   _代码位置_：`TenantDiffStandaloneApplyServiceImpl#doExecute(...)`、`ApplyLeaseServiceImpl#acquire(...)`
+
+6. **独立审计事务**：`ApplyAuditService` 使用 `PROPAGATION_REQUIRES_NEW` 独立事务持久化 `apply_record`，确保即使业务事务回滚，审计记录也不丢失。Apply 失败时通过 `markFailed()` 在独立事务中更新审计记录状态和错误详情，解决了此前"失败审计丢失"的硬伤。
+   _代码位置_：`ApplyAuditServiceImpl#createRunningRecord(...)`、`ApplyAuditServiceImpl#markFailed(...)`
 
 7. **Decision 过滤**：Apply `buildPlan` 阶段，如果 `DecisionRecordService` Bean 存在，会在 `PlanBuilder.build()` 之前调用 `applyDecisionFilter` 方法，从 diff 结果中移除 `DecisionType.SKIP` 的记录。过滤粒度为 `tableName|recordBusinessKey` 组合，不修改原始 diff 数据。
    _代码位置_：`TenantDiffStandaloneApplyServiceImpl#applyDecisionFilter(...)`
 
-8. **Selection（选择性执行）**：支持"先 preview 再勾选执行"的交互模式。preview 返回全量 actions（含 actionId）和 previewToken，用户在前端勾选后 execute 传入 `selectionMode=PARTIAL` + `selectedActionIds` + `previewToken`，PlanBuilder 校验 token 一致性并过滤为用户选中的子集。V1 仅支持选择主表（dependencyLevel=0）动作。
+8. **Selection（选择性执行）**：支持"先 preview 再勾选执行"的交互模式。preview 返回全量 actions（含 actionId）和 previewToken，用户在前端勾选后 execute 传入 `selectionMode=PARTIAL` + `selectedActionIds` + `previewToken`，PlanBuilder 校验 token 一致性并过滤为用户选中的子集。V1 仅支持选择主表（dependencyLevel=0）动作；若传入子表 actionId，会返回 HTTP 400 + `DIFF_E_0001`。
    _代码位置_：`PlanBuilder#build(...)` PARTIAL 分支、`PlanBuilder#computePreviewToken(...)`、`PlanBuilder#validateSelectedIdsExist(...)`
 
 ### 4.3 回滚流程（Rollback）
@@ -477,11 +492,16 @@ sequenceDiagram
     participant PB as PlanBuilder
     participant AE as DiffApplyExecutor
 
-    C->>RS: rollback(applyId)
+    C->>RS: rollback(applyId, acknowledgeDrift)
     RS->>RS: 加载 apply_record + snapshots
     RS->>RS: 状态检查：必须为 SUCCESS
-    RS->>RS: CAS: SUCCESS -> ROLLING_BACK
+    RS->>RS: 校验快照完整性（ROLLBACK_SNAPSHOT_INCOMPLETE）
     RS->>RS: 校验回滚数据源支持（v1 仅支持主库）
+    RS->>RS: 漂移检测：原始 plan 预期状态 vs 当前 TARGET
+    alt 检测到漂移且未确认
+        RS-->>C: ROLLBACK_DRIFT_DETECTED（需 acknowledgeDrift=true）
+    end
+    RS->>RS: CAS: SUCCESS -> ROLLING_BACK
     RS->>RS: 从快照解析 snapshotModels
     RS->>MB: buildWithWarnings(targetTenantId, scope, loadOptions)
     MB-->>RS: 当前 TARGET 模型
@@ -492,8 +512,9 @@ sequenceDiagram
     PB-->>RS: ApplyPlan
     RS->>AE: execute(targetTenantId, plan, diffs, EXECUTE)
     AE-->>RS: ApplyResult
-    RS->>RS: 更新 apply_record 状态 -> ROLLED_BACK
-    RS-->>C: TenantDiffRollbackResponse
+    RS->>RS: 回滚验证：compare(snapshotModels, 回滚后 TARGET)
+    RS->>RS: 更新 apply_record 状态 -> ROLLED_BACK（含验证结果）
+    RS-->>C: TenantDiffRollbackResponse（含 verification + driftDetected）
 ```
 
 **回滚策略**（v1 实现）：
@@ -506,10 +527,27 @@ sequenceDiagram
 
 _代码位置_：`TenantDiffStandaloneRollbackServiceImpl#rollback(Long)`、`#rollbackDiffRules(...)`、`#collectFkFieldsFromPlugins(...)`
 
+**漂移检测（Drift Detection）**：
+- 回滚前，服务端加载原始 Apply 计划，模拟出 Apply 后的预期状态，与当前 TARGET 实际状态进行 diff
+- 若检测到差异（即 Apply 后有外部修改），返回 `DIFF_E_3004`（ROLLBACK_DRIFT_DETECTED），要求调用方确认
+- 调用方通过 `acknowledgeDrift=true` 参数确认后可继续回滚
+_代码位置_：`TenantDiffStandaloneRollbackServiceImpl#detectDrift(...)`
+
+**快照完整性校验**：
+- 回滚前校验所有受影响的 businessKey 都有对应快照
+- 缺少快照的情况返回 `DIFF_E_3003`（ROLLBACK_SNAPSHOT_INCOMPLETE），防止不完整恢复
+_代码位置_：`TenantDiffStandaloneRollbackServiceImpl#validateSnapshotCompleteness(...)`
+
+**回滚验证（RollbackVerification）**：
+- 执行完恢复 SQL 后，再次 compare(快照 vs 回滚后 TARGET)，统计剩余差异数
+- 返回 `RollbackVerification`（success、remainingDiffCount、summary）
+- 全部恢复时 summary 为 `ROLLBACK_VERIFIED`，仍有残余差异时为 `ROLLBACK_REMAINING_DIFFS`
+_代码位置_：`TenantDiffStandaloneRollbackServiceImpl#rollback(...)`
+
 **已知限制**：
 - v1 回滚仅支持 target=主库方向，外部数据源回滚会被拒绝
 - 回滚不保存自身的快照（不可"回滚的回滚"）
-- 如果 apply 后 target 数据被外部修改，回滚结果可能不精确
+- 漂移检测依赖原始 plan 的 actions 模拟，复杂场景可能不完全准确
 
 _代码位置_：`TenantDiffStandaloneRollbackServiceImpl#validateRollbackDataSourceSupport(...)`
 
@@ -1388,6 +1426,7 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/rollback' \
 | `TenantDiffApplyRecordPo` | `xai_tenant_diff_apply_record` | Apply 审计 |
 | `TenantDiffSnapshotPo` | `xai_tenant_diff_snapshot` | Apply 前快照 |
 | `TenantDiffDecisionRecordPo` | `xai_tenant_diff_decision_record` | 决策记录 |
+| `TenantDiffApplyLeasePo` | `xai_tenant_diff_apply_lease` | Apply 目标租户互斥租约 |
 
 ### 7.2 DDL
 
@@ -1462,6 +1501,19 @@ CREATE TABLE IF NOT EXISTS xai_tenant_diff_decision_record (
     created_at          TIMESTAMP,
     updated_at          TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS xai_tenant_diff_apply_lease (
+    id                      BIGINT AUTO_INCREMENT PRIMARY KEY,
+    target_tenant_id        BIGINT       NOT NULL,
+    target_data_source_key  VARCHAR(64)  NOT NULL,
+    session_id              BIGINT       NOT NULL,
+    apply_id                BIGINT,
+    lease_token             VARCHAR(64)  NOT NULL,
+    leased_at               TIMESTAMP    NOT NULL,
+    expires_at              TIMESTAMP    NOT NULL,
+    CONSTRAINT uk_apply_lease_target UNIQUE (target_tenant_id, target_data_source_key),
+    CONSTRAINT uk_apply_lease_token UNIQUE (lease_token)
+);
 ```
 
 ### 7.3 表关系 ER 图
@@ -1473,6 +1525,7 @@ erDiagram
     xai_tenant_diff_session ||--o{ xai_tenant_diff_decision_record : "session_id"
     xai_tenant_diff_apply_record ||--o{ xai_tenant_diff_snapshot : "apply_id"
     xai_tenant_diff_apply_record ||--o{ xai_tenant_diff_decision_record : "apply_id"
+    xai_tenant_diff_session ||--o| xai_tenant_diff_apply_lease : "session_id"
 
     xai_tenant_diff_session {
         BIGINT id PK
@@ -1514,6 +1567,14 @@ erDiagram
         VARCHAR business_key
         VARCHAR decision
         VARCHAR execution_status
+    }
+    xai_tenant_diff_apply_lease {
+        BIGINT id PK
+        BIGINT target_tenant_id UK
+        VARCHAR target_data_source_key UK
+        BIGINT session_id FK
+        VARCHAR lease_token UK
+        TIMESTAMP expires_at
     }
 ```
 
@@ -1568,7 +1629,7 @@ _代码位置_：`PlanBuilder#build(...)`、`ApplyOptions#maxAffectedRows`
 2. `selectedActionIds` 非空校验 + 数量上限（5000）+ 格式校验（`v1:` 前缀）+ 单条长度上限（512）
 3. `previewToken` 一致性校验：服务端从 DB 重建全量 actions 后重新计算 token，与客户端回传的 token 比较；若 diff 数据或过滤条件发生变化，token 必然不匹配
 4. `selectedActionIds` 存在性校验：每个 id 必须在当前 plan 的 actions 中
-5. 主表限制校验：V1 仅允许选择 `dependencyLevel=0` 的主表动作
+5. 主表限制校验：V1 仅允许选择 `dependencyLevel=0` 的主表动作；若包含子表 actionId，抛 `PARAM_INVALID`（HTTP 400 + `DIFF_E_0001`）
 
 `actionId` 由服务端按业务维度确定性计算（`v1:escape(businessType):escape(businessKey):escape(tableName):escape(recordBusinessKey)`），客户端无法伪造有效 id 来执行不在 preview 中展示的动作。
 
@@ -1689,35 +1750,78 @@ _代码位置_：`TenantDiffProperties`、`TenantDiffSchemaInitializer`、`Tenan
 
 ---
 
-## 11. 已知限制与演进方向
+## 11. 生产边界与运维语义
 
-### 11.1 当前限制
+### 11.1 失败模式与降级（Failure Modes）
+
+- Compare 采用"长计算在事务外、结果落库在事务内"的两阶段模型；模型构建或 compare 失败时，会话状态更新为 `FAILED`，不会保留半成品 `result`
+- Apply 主库场景由 `TenantDiffStandaloneApplyServiceImpl#execute(...)` 编排；`apply_record` 通过 `ApplyAuditService`（`REQUIRES_NEW` 独立事务）持久化，即使业务事务回滚，审计记录仍保留为 `FAILED` 状态（含错误详情），可在数据库中查询排查
+- 外部数据源 Apply 通过 `SessionBasedApplyExecutor` 创建局部 `DataSourceTransactionManager`；主库审计与外部库写入之间无 XA/2PC，出现跨库不一致时只能依赖 Runbook 人工核对与补偿
+- preview 在 `previewActionLimit` 超限时直接失败返回 `DIFF_E_2014`，明确拒绝而非裁剪结果，避免前端基于不完整 action 集做确认
+- Rollback 要求 `apply_record.status=SUCCESS` 且 target=primary；不满足任一条件时 fail-fast 返回 `DIFF_E_2004`、`DIFF_E_2005` 或 `DIFF_E_3001`
+
+### 11.2 部署安全（Deployment Safety）
+
+- 整个 Standalone 运行时由 `tenant-diff.standalone.enabled=true` 显式启用；默认 `false`，避免无意暴露 REST API 与内部表
+- `TenantDiffStandaloneDecisionController` 依赖 `DecisionRecordService` Bean（`@ConditionalOnBean`），该 Bean 由 `TenantDiffStandaloneConfiguration` 默认注册（`@ConditionalOnMissingBean`），因此 Decision API 在 `standalone.enabled=true` 时默认暴露。如需关闭，需自定义配置覆写或排除该 Bean
+<!-- ssot-lint:disable-next-line BND-1,BND-2 reason="该条只声明预算归属宿主网关或调用方，tenant-diff 本身不提供默认值" -->
+- `session/create`、`apply/preview`、`apply/execute`、`apply/rollback` 全为同步接口；当前设计没有后台任务队列、断点续跑或租约续期语义，框架内自动重试预算为 `0`，超时预算必须由网关/调用方显式配置
+- 模块本身没有专用 `readiness` / `liveness` 端点；生产探活应依赖宿主应用的健康检查框架，或使用 `session/get?sessionId=0` 做"路由已装配"探活
+- 生产建议 `tenant-diff.standalone.schema.init-mode=none`，由外部 DDL 发布体系管理表结构；`always` / `embedded-only` 更适合开发、测试和 Demo
+
+### 11.3 数据留存与清理（Retention / Cleanup）
+
+- 当前代码库未实现 TTL、`@Scheduled` 清理任务或归档服务；`session`、`result`、`apply_record`、`snapshot`、`decision_record` 的留存完全由运维侧策略决定
+- 推荐窗口：`result` / `decision_record` 90 天，`snapshot` 30 天，`session` / `apply_record` 长期保留；该建议是运维口径，不代表框架内建能力
+- 清理顺序应优先处理 `snapshot` 与 `result` 等大字段表，并在回滚窗口关闭后再删除 `snapshot`
+- 若使用自定义 `schema.table-prefix`，运维清理脚本必须同步使用实际物理表名，避免误删默认前缀表
+
+### 11.4 验收标准（Acceptance）
+
+1. `tenant-diff.standalone.enabled=false` 时，不应装配 Standalone Controller；设为 `true` 后，`session/get?sessionId=0` 返回 HTTP 404 + `DIFF_E_1001`
+2. `POST /apply/preview` 在 action 数量超过 `tenant-diff.apply.preview-action-limit` 时返回 HTTP 422 + `DIFF_E_2014`
+3. `selectionMode=PARTIAL` 正常链路必须同时验证 `previewToken`、`selectedActionIds` 存在性与主表限制；其中篡改 token 返回 `DIFF_E_2012`，未知 actionId 返回 `DIFF_E_2011`，子表 actionId 返回 `DIFF_E_0001`
+4. Apply 失败注入场景下，应观察到 `apply_record` 状态为 `FAILED`（通过 `ApplyAuditService` 独立事务持久化，含 error_msg 和诊断详情），业务数据变更和 `snapshot` 已回滚
+5. 主库方向成功 Apply 后执行 rollback，应恢复目标侧数据；外部数据源方向 rollback 必须被拒绝并返回 `DIFF_E_3001`
+
+### 11.5 Runbook 入口
+
+- 部署与探活：见 [ops-guide.md](ops-guide.md) `1.6 启动与验证`、`3.2 健康检查`
+- 运行时错误与并发冲突：见 [ops-guide.md](ops-guide.md) `4.1 错误码速查`
+- 故障处置清单：见 [ops-guide.md](ops-guide.md) `4.7 Runbook`
+- 留存清理与发布门禁：见 [ops-guide.md](ops-guide.md) `5. 数据留存与清理`、`7.2 发布验收清单`
+
+---
+
+## 12. 已知限制与演进方向
+
+### 12.1 当前限制
 
 | 限制 | 说明 | 规划 |
 |------|------|------|
 | Rollback 数据源限制 | Compare/Apply 已支持多数据源；Rollback v1 仅支持 target=primary | 二期通过 apply_record 持久化 targetDataSourceKey |
 | 同步执行 | 对比和 Apply 均为同步调用，大数据量可能超时 | 建议上层改造异步 |
-| 无并发控制（跨 session） | 同一租户不同 session 并发 Apply 可能冲突 | 建议上层加分布式锁 |
-| Apply 失败审计可能丢失 | Apply 失败时 `@Transactional` 回滚可能导致 apply_record/snapshot 丢失 | 二期考虑将审计写入独立事务 |
+| ~~无并发控制（跨 session）~~ | ~~同一租户不同 session 并发 Apply 可能冲突~~ | **已实现**：`ApplyLeaseService` 通过 `xai_tenant_diff_apply_lease` 表实现目标租户 + 数据源维度的互斥租约 |
+| ~~Apply 失败审计丢失~~ | ~~Apply 失败时 `@Transactional` 回滚导致 apply_record/snapshot 丢失~~ | **已实现**：`ApplyAuditService` 使用 `REQUIRES_NEW` 独立事务持久化审计记录 |
 | 非分布式事务 | 主库与外部数据源的写入不保证原子性 | 运维需关注跨库一致性 |
 | 回滚不可链式 | 回滚自身不保存快照，不支持"回滚的回滚" | 如需反复操作建议重新 Apply |
-| Selection V1 仅支持主表 | `selectionMode=PARTIAL` 仅允许选择 `dependencyLevel=0` 的主表动作，子表动作被静默排除且无显式反馈 | 二期支持子表联动选择 |
+| Selection V1 仅支持主表 | `selectionMode=PARTIAL` 仅允许选择 `dependencyLevel=0` 的主表动作；若传入子表 actionId，返回 HTTP 400 + `DIFF_E_0001` | 二期支持子表联动选择 |
 | ALL 模式无 preview 强制 | `selectionMode=ALL` 无需 previewToken，可绕过"先预览再确认"流程 | 需在上层（Controller/前端）强制 |
 | previewToken 无过期时间 | 只要 diff 数据未变，token 永久有效 | 二期可在 token 中编入时间维度 |
 
-### 11.2 ADR 缺口建议
+### 12.2 ADR 缺口建议
 
 | ADR 标题 | 简述 | 状态 |
 |---|---|---|
 | ADR-001 错误响应规范 | `ApiResponse` 与 Spring 默认错误响应并存，校验/解析异常未统一 | Proposed |
-| ADR-002 Apply 失败审计策略 | 失败会整体回滚导致审计记录丢失，需决策是否引入独立事务审计 | Proposed |
+| ADR-002 Apply 失败审计策略 | ~~失败会整体回滚导致审计记录丢失~~ | **Resolved** -- `ApplyAuditService` 使用 `REQUIRES_NEW` 独立事务 |
 | ADR-003 Apply 安全阈值强制点 | maxAffectedRows 仅 PlanBuilder 阶段校验，需决定是否在执行端补强 | Proposed |
 | ADR-004 多数据源回滚演进 | Rollback v1 限 primary，需定义外部数据源回滚语义与风险控制 | Proposed |
 | ADR-005 端点访问控制 | diff 接口无内置鉴权，依赖外部前置条件，需明确最小权限策略 | Proposed |
 
 ---
 
-## 12. 类索引
+## 13. 类索引
 
 | 类 | 模块 | 职责 |
 |---|------|------|
@@ -1766,6 +1870,14 @@ _代码位置_：`TenantDiffProperties`、`TenantDiffSchemaInitializer`、`Tenan
 | `TenantDiffStandaloneRollbackServiceImpl#rollback(...)` | standalone | 回滚执行编排 |
 | `TenantDiffStandaloneRollbackServiceImpl#validateRollbackDataSourceSupport(...)` | standalone | v1 回滚数据源校验 |
 | `TenantDiffStandaloneRollbackServiceImpl#rollbackDiffRules(...)` | standalone | 回滚专用 DiffRules（纳入外键字段） |
+| `TenantDiffStandaloneRollbackServiceImpl#detectDrift(...)` | standalone | 漂移检测：原始 plan 预期状态 vs 当前 TARGET |
+| `ApplyAuditService` / `ApplyAuditServiceImpl` | standalone | 独立事务 Apply 审计（`REQUIRES_NEW`），确保失败也不丢审计 |
+| `ApplyLeaseService` / `ApplyLeaseServiceImpl` | standalone | Apply 目标租户互斥租约（跨 session 并发控制） |
+| `BuildWarning` | standalone(model) | 结构化构建警告记录（businessType + businessKey + message） |
+| `SessionWarning` | standalone(model) | 会话级警告汇总（含 side 信息，用于 API 响应） |
+| `RollbackVerification` | standalone(web.dto) | 回滚验证结果（success + remainingDiffCount + summary） |
+| `TenantDiffApplyLeasePo` | standalone(persistence) | Apply 互斥租约 PO（target_tenant_id + target_data_source_key 唯一约束） |
+| `TenantDiffApplyLeaseMapper` | standalone(persistence) | 租约表 Mapper（禁用租户行拦截器） |
 | `StandaloneTenantModelBuilder` | standalone | 租户模型构建器（路由到插件） |
 | `StandaloneSnapshotBuilder` | standalone | Apply 前快照构建 |
 | `DiffDataSourceRegistry` | standalone | 多数据源路由（primary + 命名数据源） |

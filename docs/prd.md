@@ -1,6 +1,6 @@
 # Tenant Diff 产品需求文档 (PRD)
 
-> SSOT 版本 | 最后更新：2026-03-16
+> SSOT 版本 | 最后更新：2026-03-22
 > 本文档为产品需求唯一权威源，整合了需求规格、快速开始、版本策略的所有内容。
 
 ---
@@ -53,7 +53,7 @@ flowchart LR
 > **Apply 阶段**（绿色）：执行数据同步（INSERT / UPDATE / DELETE），SKIP 决策的记录自动排除
 > **Rollback 阶段**（红色）：基于快照将目标数据恢复到 Apply 前状态
 
-### 1.5 不解决的问题
+### 1.5 非目标（Non-goals）
 
 - 不处理运行时业务数据（订单、库存等）的同步
 - 不替代数据库级别的主从复制
@@ -203,11 +203,32 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/session/create' \
 
 你会看到 `EXAMPLE_PRODUCT` 在 `example_product` 表上的记录级差异。
 
-### 2.6 执行 Apply
+### 2.6 预览与执行 Apply
 
-> 说明：Demo 提供的是"针对默认种子数据"的演示，目的是让你体验主流程。
+> 推荐流程是"先预览、后确认、再执行"（参见 Controller 设计注释）。Demo 为了快速体验也保留了直接 execute 的最短路径，但它不是推荐的生产操作顺序。
 
-当前 Standalone Apply API 由后端重建 Plan（不信任前端传入 actions），直接执行写入：
+#### 预览影响范围（推荐先执行）
+
+```bash
+curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/preview' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "sessionId": 1,
+    "direction": "A_TO_B",
+    "options": {
+      "allowDelete": false,
+      "maxAffectedRows": 10,
+      "businessTypes": ["EXAMPLE_PRODUCT"],
+      "diffTypes": ["INSERT", "UPDATE"]
+    }
+  }'
+```
+
+响应中包含 `statistics`（影响行数统计）、`actions`（逐条操作明细）和 `previewToken`（用于选择性执行）。
+
+#### 执行写库
+
+确认 preview 结果无误后，执行写库：
 
 ```bash
 ./scripts/demo/execute-apply.sh 1
@@ -310,6 +331,8 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/rollback' \
 | `data.createdAt` | LocalDateTime | 创建时间 |
 | `data.finishedAt` | LocalDateTime | 完成时间 |
 | `data.errorMsg` | String | 错误信息（若有） |
+| `data.warningCount` | Integer | 对比阶段警告数量 |
+| `data.warnings` | List\<SessionWarning\> | 警告列表（含 side、businessType、businessKey、message） |
 
 **限制**：当前为同步执行，大数据量可能超时。
 
@@ -419,7 +442,7 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/rollback' \
 **行为**：
 
 1. 后端从数据库加载 diff 结果重建 Plan（不信任前端传入 actions）
-2. 若 `selectionMode=PARTIAL`：校验 previewToken 一致性 → 校验 selectedActionIds 有效性 → 过滤为用户选中的子集
+2. 若 `selectionMode=PARTIAL`：校验 previewToken 一致性 → 校验 selectedActionIds 有效性 → 若包含子表动作（`dependencyLevel>0`）返回 HTTP 400 + `DIFF_E_0001` → 过滤为用户选中的子集
 3. 记录审计（`apply_record`）
 4. 保存 TARGET 侧 apply 前快照
 5. 逐条执行 INSERT / UPDATE / DELETE SQL
@@ -451,14 +474,18 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/rollback' \
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `applyId` | Long | 是 | 需回滚的 Apply 记录 ID |
+| `acknowledgeDrift` | boolean | 否 | 漂移确认标志（默认 false）。当检测到 Apply 后目标数据被外部修改时，需设为 true 才能继续回滚 |
 
 **行为**：
 
-1. 加载 apply 前快照
-2. 构建当前 TARGET 模型
-3. 快照 vs 当前 TARGET 再次 diff
-4. 生成恢复计划并执行（允许 DELETE）
-5. TARGET 恢复到 apply 前状态
+1. 加载 apply_record + 全部快照
+2. 校验快照完整性（缺失则返回 `DIFF_E_3003`）
+3. **漂移检测**：模拟原始 Apply 的预期状态，与当前 TARGET 对比。若检测到漂移且 `acknowledgeDrift=false`，返回 `DIFF_E_3004`
+4. 构建当前 TARGET 模型
+5. 快照 vs 当前 TARGET 再次 diff
+6. 生成恢复计划并执行（允许 DELETE）
+7. **回滚验证**：执行后再次 compare(快照 vs 回滚后 TARGET)，统计残余差异
+8. TARGET 恢复到 apply 前状态
 
 **响应** (`ApiResponse<TenantDiffRollbackResponse>`)：
 
@@ -466,12 +493,18 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/rollback' \
 |------|------|------|
 | `data.applyId` | Long | 被回滚的 Apply ID |
 | `data.applyResult` | ApplyResult | 回滚执行结果 |
+| `data.verification` | RollbackVerification | 回滚验证结果 |
+| `data.verification.success` | boolean | 是否完全恢复 |
+| `data.verification.remainingDiffCount` | int | 残余差异数量（0 表示完全恢复） |
+| `data.verification.summary` | String | `ROLLBACK_VERIFIED` 或 `ROLLBACK_REMAINING_DIFFS` |
+| `data.driftDetected` | Boolean | 是否检测到数据漂移 |
+| `data.diagnostics` | String | 诊断信息 |
 
 **限制**：Rollback v1 仅支持 target=primary 方向，外部数据源回滚暂不支持。
 
 ### 3.4 审查决策管理（Decision）
 
-> Decision 功能为 opt-in 设计：仅当 `DecisionRecordService` Bean 存在时，Decision Controller 才会注册。路径前缀为 `/api/tenant-diff/decision`。
+> Decision API 路径前缀为 `/api/tenant-diff/decision`。当 `tenant-diff.standalone.enabled=true` 时，`TenantDiffStandaloneConfiguration` 默认注册 `DecisionRecordService` Bean（`@ConditionalOnMissingBean`），Decision Controller 随之自动装配。如需关闭 Decision 能力，需通过自定义配置覆写或排除该 Bean。生产环境务必确保鉴权规则覆盖 `/api/tenant-diff/**` 路径。
 
 #### 3.4.1 批量保存审查决策
 
@@ -539,8 +572,8 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/rollback' \
 | POST | `/api/tenantDiff/standalone/apply/preview` | 预览 Apply 影响范围（不写库） |
 | POST | `/api/tenantDiff/standalone/apply/execute` | 执行 Apply（写库） |
 | POST | `/api/tenantDiff/standalone/apply/rollback` | 回滚 Apply |
-| POST | `/api/tenant-diff/decision/save` | 批量保存审查决策（opt-in，需 `DecisionRecordService` Bean） |
-| GET | `/api/tenant-diff/decision/list` | 查询审查决策列表（opt-in） |
+| POST | `/api/tenant-diff/decision/save` | 批量保存审查决策（默认随 standalone 启用） |
+| GET | `/api/tenant-diff/decision/list` | 查询审查决策列表（默认随 standalone 启用） |
 
 > **路径前缀说明**：Session/Apply API 使用 `/api/tenantDiff/standalone/` 前缀；Decision API 使用 `/api/tenant-diff/` 前缀（带连字符）。
 
@@ -633,7 +666,8 @@ sequenceDiagram
 |--------|------|------|
 | `DIFF_E_0001` | PARAM_INVALID | 请求参数不合法 |
 | `DIFF_E_0002` | REQUEST_BODY_MALFORMED | 请求体格式错误 |
-| `DIFF_E_0003` | INTERNAL_ERROR | 请求处理失败，请稍后重试 |
+<!-- ssot-lint:disable-next-line BND-1 reason="错误码消息直接对应 ErrorCode.INTERNAL_ERROR 常量，需与实现保持一致，不能在文案层硬编码额外预算值" -->
+| `DIFF_E_0003` | INTERNAL_ERROR | 请求处理失败，请稍后重试（框架自动重试预算=0） |
 
 #### Session 错误
 
@@ -643,6 +677,7 @@ sequenceDiagram
 | `DIFF_E_1002` | BUSINESS_DETAIL_NOT_FOUND | 业务明细不存在 |
 | `DIFF_E_1003` | SESSION_NOT_READY | 会话尚未完成对比，无法执行 Apply |
 | `DIFF_E_1004` | SESSION_ALREADY_APPLIED | 该会话已有成功的 Apply 记录，请勿重复执行 |
+| `DIFF_E_1005` | SESSION_COMPARE_CONFLICT | 会话正在对比中，请勿并发操作 |
 
 #### Apply 错误
 
@@ -654,6 +689,7 @@ sequenceDiagram
 | `DIFF_E_2004` | APPLY_NOT_SUCCESS | Apply 记录状态不是 SUCCESS，无法回滚 |
 | `DIFF_E_2005` | APPLY_ALREADY_ROLLED_BACK | 该 Apply 已被回滚，请勿重复执行 |
 | `DIFF_E_2006` | APPLY_CONCURRENT_CONFLICT | 并发冲突：当前会话正在执行 Apply 或已被其他请求处理 |
+| `DIFF_E_2008` | APPLY_TARGET_BUSY | 目标租户正在被其他会话操作，请稍后重试 |
 | `DIFF_E_2010` | SELECTION_EMPTY | 未选择任何记录 |
 | `DIFF_E_2011` | SELECTION_INVALID_ID | 所选记录标识无效 |
 | `DIFF_E_2012` | SELECTION_STALE | 数据已变化，请重新预览 |
@@ -665,6 +701,8 @@ sequenceDiagram
 |--------|------|------|
 | `DIFF_E_3001` | ROLLBACK_DATASOURCE_UNSUPPORTED | 回滚暂不支持外部数据源 |
 | `DIFF_E_3002` | ROLLBACK_CONCURRENT_CONFLICT | 并发冲突：当前 Apply 正在回滚或已被其他请求处理 |
+| `DIFF_E_3003` | ROLLBACK_SNAPSHOT_INCOMPLETE | 快照不完整，无法安全回滚 |
+| `DIFF_E_3004` | ROLLBACK_DRIFT_DETECTED | Apply 后目标数据已被外部修改，需确认后回滚（传 `acknowledgeDrift=true`） |
 
 ---
 
@@ -694,7 +732,7 @@ sequenceDiagram
 | 审计追溯 | 每次 Apply 写入 `apply_record`（含完整 planJson） |
 | 快照保存 | Apply 前自动保存 TARGET 侧快照（actions 为空则不快照） |
 | Selection 防篡改 | PARTIAL 模式下 previewToken 防止 diff 数据过时，actionId 由服务端确定性生成且存在性校验 |
-| Selection 主表限制 | V1 PARTIAL 仅支持 dependencyLevel=0 的主表动作，子表动作被排除 |
+| Selection 主表限制 | V1 PARTIAL 仅支持 dependencyLevel=0 的主表动作；若传入子表 actionId，返回 HTTP 400 + `DIFF_E_0001` |
 | Preview 大小保护 | preview action 数量超过 `previewActionLimit`（默认 5000）时拒绝返回 |
 | Decision 过滤 | 若 `DecisionRecordService` Bean 存在，buildPlan 前按 `DecisionType.SKIP` 自动移除对应记录，不进入 Apply 计划 |
 
@@ -703,6 +741,9 @@ sequenceDiagram
 | 规则 | 说明 |
 |------|------|
 | 快照恢复 | 基于 apply 前 TARGET 快照与当前 TARGET 的 diff 生成恢复计划 |
+| 快照完整性校验 | 回滚前校验所有受影响 businessKey 都有对应快照，缺失则拒绝回滚（`DIFF_E_3003`） |
+| 漂移检测 | 回滚前模拟 Apply 预期状态与实际 TARGET 对比，检测到漂移时需用户确认（`acknowledgeDrift=true`） |
+| 回滚验证 | 执行后再次 compare 快照 vs 回滚后状态，返回验证结果（`RollbackVerification`） |
 | 外键字段纳入 | 回滚在同一租户内执行，外键字段不应被忽略 |
 | 允许 DELETE | 回滚计划默认允许 DELETE（用于删除 Apply 新增的记录） |
 | 数据源限制 | v1 仅支持 target=primary 方向，外部数据源回滚暂不支持 |
@@ -747,7 +788,7 @@ sequenceDiagram
 - Apply 审计记录（apply_record_po）：完整 planJson + 执行状态
 - Apply 前快照（snapshot_po）：每个受影响业务对象的完整数据备份
 
-> 注：Apply 失败时事务回滚会连同 apply_record 和 snapshot 一起丢失，排查需依赖应用日志。
+> 注：`apply_record` 通过独立事务（`ApplyAuditService`）持久化，即使 Apply 失败也会保留为 `FAILED` 状态，可在数据库中查询排查。
 
 ### 7.3 可测试性
 
@@ -755,6 +796,46 @@ sequenceDiagram
 - `PlanBuilder` 无外部依赖，可独立单测
 - 业务插件通过接口隔离，可 mock 测试
 - Demo 模块提供完整的集成测试套件
+
+### 7.4 失败模式与降级（Failure Modes）
+
+- `create session` 采用"创建即同步 compare"模型；若插件加载、模型构建或 compare 过程抛错，会话状态更新为 `FAILED`，调用方需重新创建会话，不存在后台自动重试
+- Apply 失败时，业务数据变更会回滚，但 `apply_record` 通过 `ApplyAuditService`（`REQUIRES_NEW` 独立事务）保留为 `FAILED` 状态，包含错误详情和诊断信息，可在数据库中查询排查
+- 外部数据源 Apply 使用独立 `DataSourceTransactionManager` 本地事务，与主库审计不是分布式事务；若出现跨库不一致，需要按 `applyId`、业务键和目标库实际写入结果进行人工止损
+- Rollback v1 若 target 指向外部数据源，会直接返回 `DIFF_E_3001`；若 Apply 后目标侧数据又被人工修改，回滚结果只保证"尽量恢复到快照状态"，不承诺完全覆盖外部新增语义
+- preview action 数量超过 `tenant-diff.apply.preview-action-limit`（默认 `5000`）时返回 `DIFF_E_2014`，降级策略是缩小筛选范围，而不是自动截断结果
+
+### 7.5 部署安全（Deployment Safety）
+
+- 组件为显式启用模式，只有设置 `tenant-diff.standalone.enabled=true` 后才会装配 Controller、Service 与持久化组件；默认关闭
+<!-- ssot-lint:disable-next-line BND-1,BND-2 reason="该条只声明预算归属宿主应用与网关，tenant-diff 本身不提供默认值" -->
+- `session/create`、`apply/preview`、`apply/execute`、`apply/rollback` 当前全部为同步接口，无队列、无异步作业；框架内自动重试预算为 `0`，超时预算必须由调用方和网关显式配置，避免把同步接口当作后台任务
+- 当前模块没有内建 `readiness` / `liveness` 端点；生产环境应复用宿主应用的健康检查体系，或使用 `GET /api/tenantDiff/standalone/session/get?sessionId=0` 作为"路由已加载"探活
+- 生产环境建议 `tenant-diff.standalone.schema.init-mode=none`，由 Flyway / Liquibase 或受控 DDL 发布管理框架表，避免应用启动期隐式改表
+
+### 7.6 数据留存与清理（Retention / Cleanup）
+
+- 当前版本没有内建 TTL、定时清理任务或归档作业；所有清理动作都需要由运维侧脚本或数据库作业显式执行
+- 推荐保留窗口：`result` / `decision_record` 保留 90 天，`snapshot` 保留 30 天，`session` / `apply_record` 作为轻量审计记录长期保留；实际窗口应由审计要求与回滚窗口共同决定
+- 清理策略必须与回滚窗口联动：只要业务仍可能回滚，对应 `snapshot` 就不能被提前删除
+- 数据清理应优先按时间窗口和表体量执行 dry-run 评估，避免一次性删除过大批次造成锁表或审计缺口
+
+### 7.7 验收标准（Acceptance）
+
+1. 当 `tenant-diff.standalone.enabled=false` 时，Standalone 端点不应暴露；当其为 `true` 时，`GET /api/tenantDiff/standalone/session/get?sessionId=0` 应返回 HTTP 404 + `DIFF_E_1001`
+2. Apply PARTIAL 正常链路中，preview 返回 `previewToken` 与 action 列表；execute 使用同一筛选条件回传后可成功执行，篡改 `previewToken` 时返回 HTTP 422 + `DIFF_E_2012`
+3. 当 `selectedActionIds` 中包含子表动作（`dependencyLevel>0`）时，execute 必须拒绝并返回 HTTP 400 + `DIFF_E_0001`，不能静默排除
+4. 模拟 Apply 执行异常时，应观察到 `apply_record` 状态为 `FAILED`（独立审计事务保留），应用 ERROR 日志中有 `执行 Apply 动作失败`
+5. 主库方向成功 Apply 后执行 rollback，应恢复目标侧数据，响应含 `verification.success=true`；外部数据源方向 rollback 必须返回 `DIFF_E_3001`
+6. Apply 后外部修改目标数据再执行 rollback（`acknowledgeDrift=false`），应返回 `DIFF_E_3004`；传入 `acknowledgeDrift=true` 后可继续回滚
+7. 同一目标租户并发 Apply 时，后者应返回 `DIFF_E_2008`（APPLY_TARGET_BUSY）
+
+### 7.8 Runbook 入口
+
+- 启动与探活：见 [ops-guide.md](ops-guide.md) `1.6 启动与验证`
+- 健康检查与告警：见 [ops-guide.md](ops-guide.md) `3.2 健康检查`、`3.3 告警建议`
+- 故障处置：见 [ops-guide.md](ops-guide.md) `4.1 错误码速查` 与 `4.7 Runbook`
+- 数据清理与发布验收：见 [ops-guide.md](ops-guide.md) `5. 数据留存与清理`、`7.2 发布验收清单`
 
 ---
 
@@ -847,9 +928,9 @@ sequenceDiagram
 |------|------|------|
 | 同步执行 | 对比和 Apply 均为同步调用，大数据量可能超时 | 建议上层改造异步 |
 | Rollback 数据源限制 | Rollback v1 仅支持 target=primary | 二期支持 |
-| 无并发控制 | 同一租户并发 Apply 可能冲突 | 建议上层加分布式锁 |
-| Apply 失败审计丢失 | 失败时事务回滚导致 apply_record 和 snapshot 丢失 | 二期考虑独立事务 |
+| ~~无并发控制~~ | ~~同一租户并发 Apply 可能冲突~~ | **已实现**：`ApplyLeaseService` 目标租户维度互斥租约 |
+| ~~Apply 失败审计丢失~~ | ~~失败时事务回滚导致审计丢失~~ | **已实现**：`ApplyAuditService` 独立事务审计 |
 | 影响行数保护边界 | maxAffectedRows 仅在 PlanBuilder 阶段校验，执行端不二次校验 | 二期考虑执行端补校验 |
-| Selection V1 仅支持主表 | `selectionMode=PARTIAL` 仅允许选择主表动作（dependencyLevel=0），子表动作被静默排除 | 二期支持子表联动选择 |
+| Selection V1 仅支持主表 | `selectionMode=PARTIAL` 仅允许选择主表动作（dependencyLevel=0）；若传入子表 actionId，返回 HTTP 400 + `DIFF_E_0001` | 二期支持子表联动选择 |
 | ALL 模式无 preview 强制 | `selectionMode=ALL` 可跳过 preview 直接 execute，不要求 previewToken | 上层/前端强制流程 |
 | previewToken 无过期时间 | token 只要 diff 数据不变即永久有效 | 二期编入时间维度 |

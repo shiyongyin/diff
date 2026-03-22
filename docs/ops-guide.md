@@ -1,6 +1,6 @@
 # Tenant Diff 运维手册
 
-> SSOT 版本 | 最后更新：2026-03-16
+> SSOT 版本 | 最后更新：2026-03-22
 > 本文档为运维操作唯一权威源，整合了部署、配置、排障、发布、安全的所有内容。
 
 ---
@@ -13,7 +13,7 @@
 |------|------|
 | JDK | 17+ |
 | 构建工具 | 仓库自带 Maven Wrapper（`./mvnw`） |
-| 数据库 | MySQL 5.7+ / PostgreSQL 10+ / H2（仅 Demo） |
+| 数据库 | MySQL 5.7+（内置 DDL）/ H2（Demo 与测试，内置 DDL）/ PostgreSQL 10+（需自行准备 DDL，当前发行包未内置 `schema-postgresql.sql`） |
 | Spring Boot | 与当前 `pom.xml` 声明版本一致 |
 | MyBatis-Plus | 与当前 `pom.xml` 声明版本一致 |
 
@@ -29,7 +29,7 @@ graph TB
         APP["Spring Boot 应用"]
         SC["Session Controller"]
         AC["Apply Controller"]
-        DC["Decision Controller<br/>(opt-in)"]
+        DC["Decision Controller<br/>(默认启用)"]
         SVC["Service 层"]
         ENG["Diff Engine"]
         PLG["业务插件"]
@@ -77,7 +77,7 @@ tenant-diff.standalone.enabled=true
 - `StandaloneSnapshotBuilder` - 快照构建器
 - `TenantDiffStandaloneService` / `TenantDiffStandaloneApplyService` / `TenantDiffStandaloneRollbackService` - 业务服务
 - `DecisionRecordService` - 决策记录服务
-- `TenantDiffStandaloneDecisionController` - Decision REST API（`@ConditionalOnBean(DecisionRecordService.class)`，opt-in 生效）
+- `TenantDiffStandaloneDecisionController` - Decision REST API（`@ConditionalOnBean(DecisionRecordService.class)`，默认随 standalone 启用；`DecisionRecordService` 由自动配置默认注册）
 
 **验证方式**：调用 `GET /api/tenantDiff/standalone/session/get?sessionId=0`，若返回 **HTTP 404** + `{"success":false,"code":"DIFF_E_1001","message":"会话不存在","data":null}` 说明模块已正常加载。注意：该接口对 `SESSION_NOT_FOUND` 返回 HTTP 404（不是 200），基础设施监控配置需排除此探活路径或按 response body 判断。若全局 Jackson 配置为 `NON_NULL`，`data:null` 可能被省略。也可通过 Actuator beans endpoint 确认 `tenantDiffEngine`、`standalonePluginRegistry` 等 Bean 是否存在。
 
@@ -94,6 +94,7 @@ tenant-diff.standalone.enabled=true
 | `TenantDiffApplyRecordPo` | `xai_tenant_diff_apply_record` | Apply 审计记录（含 planJson 大字段） |
 | `TenantDiffSnapshotPo` | `xai_tenant_diff_snapshot` | Apply 前快照（含 snapshotJson 大字段） |
 | `TenantDiffDecisionRecordPo` | `xai_tenant_diff_decision_record` | 决策记录 |
+| `TenantDiffApplyLeasePo` | `xai_tenant_diff_apply_lease` | Apply 目标租户互斥租约（跨 session 并发控制） |
 
 #### 1.6.2 DDL 脚本
 
@@ -179,6 +180,19 @@ CREATE TABLE IF NOT EXISTS xai_tenant_diff_decision_record (
     created_at          TIMESTAMP,
     updated_at          TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS xai_tenant_diff_apply_lease (
+    id                      BIGINT AUTO_INCREMENT PRIMARY KEY,
+    target_tenant_id        BIGINT       NOT NULL,
+    target_data_source_key  VARCHAR(64)  NOT NULL,
+    session_id              BIGINT       NOT NULL,
+    apply_id                BIGINT,
+    lease_token             VARCHAR(64)  NOT NULL,
+    leased_at               TIMESTAMP    NOT NULL,
+    expires_at              TIMESTAMP    NOT NULL,
+    CONSTRAINT uk_apply_lease_target UNIQUE (target_tenant_id, target_data_source_key),
+    CONSTRAINT uk_apply_lease_token UNIQUE (lease_token)
+);
 ```
 
 **生产环境调整建议**：
@@ -193,11 +207,11 @@ CREATE TABLE IF NOT EXISTS xai_tenant_diff_decision_record (
 
 **生产环境推荐方式**：
 
-方式一（推荐）：配置 `tenant-diff.standalone.schema.init-mode=always`，应用启动时自动执行对应方言的 DDL（`CREATE TABLE IF NOT EXISTS`，不会删除已有数据）。
+方式一（开发/测试推荐）：配置 `tenant-diff.standalone.schema.init-mode=always`，应用启动时自动执行对应方言的 DDL（`CREATE TABLE IF NOT EXISTS`，不会删除已有数据）。
 
-方式二：由 DBA 手动执行 MySQL 版本 DDL（`META-INF/tenant-diff/schema-mysql.sql`），配置 `init-mode=none`。
+方式二（生产推荐）：由 DBA 或外部迁移工具执行 MySQL 版本 DDL（`META-INF/tenant-diff/schema-mysql.sql`），配置 `init-mode=none`。
 
-#### 1.5.3 大字段建议
+#### 1.4.3 大字段建议
 
 | 字段 | 所在表 | 说明 |
 |------|--------|------|
@@ -206,18 +220,20 @@ CREATE TABLE IF NOT EXISTS xai_tenant_diff_decision_record (
 | `plan_json` | `xai_tenant_diff_apply_record` | Apply 计划 JSON，KB 到 MB 级 |
 | `scope_json` / `options_json` | `xai_tenant_diff_session` | 通常 KB 级 |
 
+> **apply_lease 表**：`xai_tenant_diff_apply_lease` 为轻量级互斥控制表，无大字段，通过唯一约束实现跨 session 的目标租户互斥。过期租约在 acquire 时自动清理。
+
 生产环境务必使用 `LONGTEXT`（MySQL）或 `TEXT`（PostgreSQL），避免使用 `VARCHAR` 导致截断。
 
 ### 1.5 配置项参考
 
-#### 1.6.1 必须配置
+#### 1.5.1 必须配置
 
 | 配置项 | 说明 | 必须 |
 |--------|------|------|
 | `tenant-diff.standalone.enabled` | 是否启用 standalone 模块 | 是 |
 | `spring.datasource.*` | 主数据源配置 | 是 |
 
-#### 1.6.2 Standalone 模块配置
+#### 1.5.2 Standalone 模块配置
 
 配置前缀：`tenant-diff.standalone.*`（来自 `TenantDiffProperties`）
 
@@ -228,7 +244,7 @@ CREATE TABLE IF NOT EXISTS xai_tenant_diff_decision_record (
 | `main-business-key-field` | String | `main_business_key` | 主业务键的派生字段名 |
 | `parent-business-key-field` | String | `parent_business_key` | 父业务键的派生字段名 |
 
-#### 1.6.3 Schema 初始化配置
+#### 1.5.3 Schema 初始化配置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
@@ -247,13 +263,13 @@ CREATE TABLE IF NOT EXISTS xai_tenant_diff_decision_record (
 
 _代码位置_：`TenantDiffSchemaInitConfiguration`、`TenantDiffSchemaInitializer`
 
-#### 1.6.4 Apply 配置
+#### 1.5.4 Apply 配置
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `tenant-diff.apply.preview-action-limit` | int | `5000` | Preview 返回的 action 数量上限，超过时返回 `DIFF_E_2014` |
 
-#### 1.5.3 多数据源配置
+#### 1.5.5 多数据源配置
 
 配置前缀：`tenant-diff.datasources.*`（来自 `DiffDataSourceProperties`）
 
@@ -292,7 +308,7 @@ tenant-diff:
 
 插件通过 `LoadOptions.dataSourceKey` 指定读取哪个数据源。`dataSourceKey=erp-prod` 路由到上述数据源；`null` 或 `"primary"` 路由主数据源。
 
-#### 1.5.4 Demo 默认配置
+#### 1.5.6 Demo 默认配置
 
 来自 `tenant-diff-demo/src/main/resources/application.yml`：
 
@@ -357,6 +373,14 @@ curl -sS "http://localhost:8080/api/tenantDiff/standalone/session/get?sessionId=
 
 该返回表示 Controller 已加载并可路由。注意 HTTP 状态码为 404 而非 200。
 
+### 1.7 非目标与部署安全边界（Non-goals / Deployment Safety）
+
+- 本组件不处理运行时业务数据同步，不替代数据库复制，也不提供跨主库与外部数据源的分布式事务保障
+- 模块只有在 `tenant-diff.standalone.enabled=true` 时才会装配；生产环境建议将其作为显式开关纳入发布参数管理
+- 当前没有专用的 `readiness` / `liveness` 端点；若宿主应用未接入 Actuator，则需自行维护 HTTP 探活或脚本探活
+<!-- ssot-lint:disable-next-line BND-1 reason="该条只声明预算归属宿主应用与网关，tenant-diff 本身不固化默认值" -->
+- `session/create`、`apply/preview`、`apply/execute`、`apply/rollback` 全是同步接口；框架内自动重试预算为 `0`，运维需与调用方显式约定超时、重试和流量控制，避免把同步请求当异步作业重试风暴使用
+
 ---
 
 ## 2. 运行时行为
@@ -385,9 +409,9 @@ flowchart LR
 
 #### 2.2.1 主库 Apply 事务
 
-审计记录（`apply_record`）与快照（`snapshot`）保存和 SQL 执行在同一个 `@Transactional(rollbackFor = Exception.class)` 内，失败时全部回滚。
+**审计记录**（`apply_record`）通过 `ApplyAuditService` 在 `REQUIRES_NEW` 独立事务中持久化，即使业务事务回滚也不丢失。快照（`snapshot`）保存和 SQL 执行在同一个 `@Transactional(rollbackFor = Exception.class)` 内，失败时快照和业务数据变更一起回滚，但审计记录保留为 `FAILED` 状态。
 
-**来源**：`TenantDiffStandaloneApplyServiceImpl#execute(ApplyPlan)` 标记 `@Transactional(rollbackFor = Exception.class)`。
+**来源**：`ApplyAuditServiceImpl#createRunningRecord(...)` 使用 `PROPAGATION_REQUIRES_NEW`；`TenantDiffStandaloneApplyServiceImpl#execute(ApplyPlan)` 标记 `@Transactional(rollbackFor = Exception.class)`。
 
 #### 2.2.2 外部数据源 Apply 事务
 
@@ -396,15 +420,21 @@ flowchart LR
 - 审计记录回滚但外部 SQL 已提交
 - 外部 SQL 回滚但审计记录已提交
 
-#### 2.2.3 已知限制：Apply 失败审计丢失
+#### 2.2.3 Apply 审计耐久性
 
-整个 execute 方法包在 `@Transactional(rollbackFor=Exception.class)` 内，失败时全部回滚（**包括 `apply_record` 和 `snapshot`**），保证系统状态一致（session 恢复为 SUCCESS，无孤立 record）。这意味着失败的 Apply 在数据库中无审计记录，排查只能依赖应用 ERROR 日志中的 `执行 Apply 动作失败` 关键词。这是当前版本的设计取舍，优先保证数据一致性。
+`apply_record` 通过 `ApplyAuditService`（`REQUIRES_NEW` 独立事务）持久化。即使业务事务回滚，审计记录保留为 `FAILED` 状态，包含错误详情和诊断信息（`diagnostics` JSON），可直接在数据库中查询排查。这解决了此前"失败审计丢失"的问题。
+
+排查 Apply 失败时，可通过以下方式定位：
+1. **数据库**：查询 `xai_tenant_diff_apply_record WHERE status = 'FAILED'`，`error_msg` 和诊断 JSON 包含失败详情
+2. **应用日志**：搜索 `执行 Apply 动作失败` 关键词，含 actionHint 与异常栈
 
 | 操作 | 事务 | 说明 |
 |------|------|------|
 | 创建会话 + 执行对比 | `TransactionTemplate` 编程式 | 删旧结果 + 插入新结果在同一事务中 |
-| Apply 执行（主库） | `@Transactional(rollbackFor=Exception.class)` | apply_record + snapshot + SQL 执行在同一事务管理器 |
+| Apply 审计记录 | `REQUIRES_NEW` 独立事务 | `ApplyAuditService` 确保审计不随业务事务回滚而丢失 |
+| Apply 执行（主库） | `@Transactional(rollbackFor=Exception.class)` | snapshot + SQL 执行在同一事务管理器；审计在独立事务中 |
 | Apply 执行（外部数据源） | `DataSourceTransactionManager` 手动事务 | 审计写主库、SQL 写外部库，非分布式事务 |
+| Apply 目标互斥租约 | `REQUIRES_NEW` 独立事务 | `ApplyLeaseService` 确保租约生命周期独立于业务事务 |
 | Rollback | `@Transactional(rollbackFor=Exception.class)` | 恢复计划执行（v1 仅支持主库方向） |
 
 ### 2.3 关键日志模式
@@ -429,6 +459,18 @@ flowchart LR
 | `业务异常 [DIFF_E_xxxx]: ...` | 业务逻辑错误（含 Selection/Decision 校验失败） | WARN |
 | `请求处理失败` | 未预期的内部异常（含完整栈） | ERROR |
 | `Decision 过滤: sessionId=X, 跳过 N 条 SKIP 记录` | Apply buildPlan 阶段按 Decision 过滤 | DEBUG |
+| `Apply 目标租约获取成功` / `Apply 目标租约获取失败` | 租约获取结果，失败时另一个 session 正在操作同一目标 | INFO / WARN |
+| `Apply 目标租约已释放` | Apply 执行完毕后释放租约 | DEBUG |
+| `回滚漂移检测: applyId=X, 检测到 N 处差异` | 目标数据在 Apply 后被外部修改 | WARN |
+| `回滚验证: applyId=X, remainingDiffs=N` | 回滚后残余差异数量 | INFO |
+
+### 2.4 失败模式与降级（Failure Modes）
+
+- Compare 失败：`session/create` 内同步执行 compare，异常时 session 状态更新为 `FAILED`；不会生成半成品 `result` 供后续 Apply 使用
+- Apply 失败：`apply_record` 通过独立事务（`ApplyAuditService`）保留为 `FAILED` 状态（含错误详情），可在数据库中查询；快照和业务数据变更回滚保证一致性
+- 外部数据源 Apply：主库审计与外部库写入不是分布式事务；出现跨库不一致时，应先停止重试，再按 `applyId`、目标库数据和业务键人工核对
+- Preview 超限：`/apply/preview` 超过 `tenant-diff.apply.preview-action-limit` 时返回 `DIFF_E_2014`；降级方式是缩小筛选范围，不是截断返回
+- Rollback 边界：Rollback v1 仅支持主库 target，外部数据源场景直接返回 `DIFF_E_3001`
 
 ---
 
@@ -438,9 +480,10 @@ flowchart LR
 
 | 指标 | 来源 | 告警建议 |
 |------|------|---------|
-| Apply 失败（**主信号**） | 应用日志关键字 `执行 Apply 动作失败` | 任何出现立即告警 |
+| Apply 失败 | `xai_tenant_diff_apply_record.status = 'FAILED'` + 应用日志 `执行 Apply 动作失败` | 任何出现立即告警。审计记录现已通过独立事务持久化，失败也可在 DB 中查询 |
 | session 状态 FAILED 数量 | `xai_tenant_diff_session.status = 'FAILED'` | 连续失败 >3 次告警 |
-| Apply 成功（仅审计） | `xai_tenant_diff_apply_record.status = 'SUCCESS'` | 用于审计与定位 applyId（失败场景通常不会留下记录，**不要用它做失败告警**） |
+| Apply 审计 | `xai_tenant_diff_apply_record.status` | 用于审计与定位 applyId，`FAILED` 记录含 error_msg 和诊断详情 |
+| 租约占用 | `xai_tenant_diff_apply_lease` 表行数 | 正常应为 0 或极少。过期未清理的租约说明 Apply 异常中断 |
 | 单次对比耗时 | `session.finishedAt - session.createdAt` | >60s 预警，>300s 告警 |
 | result 表行数增长 | `COUNT(*) FROM xai_tenant_diff_result` | 超过阈值提醒清理 |
 | 未预期异常 | 应用日志关键字 `请求处理失败` | 出现即告警 |
@@ -458,7 +501,7 @@ curl -s -o /dev/null -w "%{http_code}" "http://<host>/api/tenantDiff/standalone/
 # 返回 404 即为正常
 ```
 
-该探活仅验证应用已启动且 diff 模块已装配，不依赖任何业务数据。注意：该端点对不存在的 sessionId 返回 HTTP 404（语义化状态码），基础设施监控需按 response body 中的 `code` 字段判断，或改用其他探活路径。
+该探活仅验证应用已启动且 diff 模块已装配，不依赖任何业务数据。注意：该端点对不存在的 sessionId 返回 HTTP 404（语义化状态码），基础设施监控需按 response body 中的 `code` 字段判断，或改用其他探活路径。当前模块本身没有内建 `readiness` / `liveness` 端点；若宿主应用单独启用了 Actuator，可直接复用宿主健康检查。
 
 #### 3.2.2 功能 Smoke（依赖数据）
 
@@ -482,7 +525,7 @@ curl -X POST "http://<host>/api/tenantDiff/standalone/session/create" \
 
 | 告警名称 | 触发条件 | 级别 | 说明 |
 |----------|---------|------|------|
-| Apply 执行失败 | 日志中出现 `执行 Apply 动作失败` | P1 | Apply 失败的**唯一可靠信号** |
+| Apply 执行失败 | `apply_record.status = 'FAILED'` 或日志中出现 `执行 Apply 动作失败` | P1 | 审计记录已通过独立事务持久化，可同时从 DB 和日志排查 |
 | 内部异常 | 日志中出现 `请求处理失败`（ERROR 级别） | P2 | 未预期的运行时异常 |
 | 对比超时 | session 耗时 >300s | P2 | 可能是数据量过大或数据库慢查询 |
 | 对比连续失败 | session 状态 FAILED 连续 >3 次 | P2 | 检查插件和数据源 |
@@ -522,12 +565,12 @@ flowchart TD
 
 **DIFF_E_0001: 请求参数不合法 (PARAM_INVALID)**
 
-- 触发场景：必填参数缺失（如 `sessionId`、`businessType`、`businessKey` 为空）；参数值不合法（如 `diffType` 传入不存在的枚举值）
+- 触发场景：必填参数缺失（如 `sessionId`、`businessType`、`businessKey` 为空）；参数值不合法（如 `diffType` 传入不存在的枚举值）；`selectionMode=PARTIAL` 时传入了子表 actionId（`dependencyLevel>0`）
 - 排查步骤：
   1. 检查请求 URL 中的 query parameter 是否完整
   2. 对照 API 文档确认参数名称拼写
   3. 检查参数值类型（如 `sessionId` 应为数值类型）
-- 解决方案：补全缺失参数，修正参数值。`diffType` 合法值为 `DiffType` 枚举全名（`BUSINESS_INSERT`、`BUSINESS_DELETE`、`INSERT`、`UPDATE`、`DELETE`、`NOOP` 等），注意 `listBusiness` API 的 diffType 过滤作用于业务级 diff_type 列，常用值为 `BUSINESS_INSERT` 和 `BUSINESS_DELETE`
+- 解决方案：补全缺失参数，修正参数值。`diffType` 合法值为 `DiffType` 枚举全名（`BUSINESS_INSERT`、`BUSINESS_DELETE`、`INSERT`、`UPDATE`、`DELETE`、`NOOP` 等），注意 `listBusiness` API 的 diffType 过滤作用于业务级 diff_type 列，常用值为 `BUSINESS_INSERT` 和 `BUSINESS_DELETE`。若为 PARTIAL 勾选执行，请只回传 preview 返回的主表 actionId
 
 **DIFF_E_0002: 请求体格式错误 (REQUEST_BODY_MALFORMED)**
 
@@ -641,6 +684,16 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/execute' \
 - 排查步骤：检查是否有多个客户端或脚本同时提交了 Apply 请求
 - 解决方案：确保同一 Session 的 Apply 操作串行执行；重试请求（框架使用乐观锁，不会产生脏数据）
 
+**DIFF_E_2008: 目标租户正在被其他会话操作 (APPLY_TARGET_BUSY)**
+
+- 触发场景：另一个 Session 正在对同一目标租户 + 数据源执行 Apply，互斥租约尚未释放
+- 排查步骤：
+  1. 查询 `xai_tenant_diff_apply_lease` 表，确认是否有活跃租约
+  2. 检查 `expires_at` 是否已过期（默认 TTL 10 分钟）
+  3. 若租约过期但未清理，可能是前次 Apply 异常中断
+- 解决方案：等待前一个 Apply 完成后重试；若确认前次 Apply 已异常中断，过期租约会在下次 acquire 时自动清理
+- 紧急处理：若需强制解锁，可直接删除 `xai_tenant_diff_apply_lease` 表中对应记录（需确认无其他 Apply 正在执行）
+
 #### Selection 错误
 
 **DIFF_E_2010: 未选择任何记录 (SELECTION_EMPTY)**
@@ -682,6 +735,22 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/execute' \
 - 触发场景：多个请求同时对同一个 Apply 记录执行回滚
 - 解决方案：确保同一 Apply 的回滚操作串行执行；重试请求
 
+**DIFF_E_3003: 快照不完整 (ROLLBACK_SNAPSHOT_INCOMPLETE)**
+
+- 触发场景：回滚时发现部分受影响的 businessKey 缺少对应的快照记录
+- 排查步骤：
+  1. 查询 `xai_tenant_diff_snapshot WHERE apply_id = ?` 确认实际快照覆盖范围
+  2. 与原始 `apply_record.plan_json` 对比，确认哪些 businessKey 缺失
+- 解决方案：此 Apply 无法安全回滚，需按 plan 中的 action 列表手动恢复缺失部分
+
+**DIFF_E_3004: 目标数据已被外部修改 (ROLLBACK_DRIFT_DETECTED)**
+
+- 触发场景：回滚前检测到 Apply 后目标数据被外部操作修改（漂移检测）
+- 排查步骤：
+  1. 确认是否有其他流程在 Apply 后修改了目标租户数据
+  2. 评估漂移范围和影响
+- 解决方案：若确认可以覆盖外部修改，在请求中设置 `"acknowledgeDrift": true` 重试回滚；若需保留外部修改，则按业务需求手动处理
+
 ### 4.2 对比结果为空
 
 **现象**：创建会话成功但 `statistics` 全为 0。
@@ -696,10 +765,9 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/execute' \
 
 **现象**：调用 `/api/tenantDiff/standalone/apply/execute` 返回 `success=false`（或 HTTP 400/500）。
 
-**重要**：失败场景下 `apply_record/snapshot` 会因事务回滚而不存在，不建议以表状态作为失败主信号。
-
 **排查步骤**：
-1. **主信号：应用 ERROR 日志**中搜索 `执行 Apply 动作失败` 关键词（含 actionHint 与异常栈）
+1. **数据库审计**：查询 `xai_tenant_diff_apply_record WHERE status = 'FAILED' AND session_id = ?`，`error_msg` 字段包含失败原因（审计记录通过独立事务持久化，不会因业务回滚丢失）
+2. **应用日志**：搜索 `执行 Apply 动作失败` 关键词（含 actionHint 与异常栈）
 2. 若报 `estimatedAffectedRows(N) exceeds maxAffectedRows(M)`，说明是在构建 `ApplyPlan` 的阶段触发阈值保护，需要收敛 scope/白名单或调整 `maxAffectedRows`
 3. 常见原因：
    - `plan contains DELETE but allowDelete=false`：计划含 DELETE 但未开启删除权限
@@ -712,7 +780,7 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/execute' \
 **现象**：回滚接口返回错误。
 
 **排查步骤**：
-1. `no snapshots found for applyId`：该 Apply 没有保存快照。常见原因：(a) Apply 计划为空（无 actions），不产生快照；(b) Apply 执行失败，`@Transactional` 回滚连同 apply_record 和 snapshot 一起丢失
+1. `no snapshots found for applyId`：该 Apply 没有保存快照。常见原因：(a) Apply 计划为空（无 actions），不产生快照；(b) Apply 执行失败，业务事务回滚连同 snapshot 一起丢失（注：`apply_record` 通过独立事务保留为 `FAILED` 状态，可查询确认）
 2. `DIFF_E_3001`：原始 Apply 打到了非主库数据源，v1 暂不支持外部数据源回滚
 3. `snapshotJson parse failed`：快照数据格式损坏
 4. 回滚本质是"快照 vs 当前做 diff 再 apply"，如果当前数据已被其他操作修改，恢复结果可能与预期不完全一致
@@ -745,9 +813,20 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/execute' \
 
 5. **异常处理覆盖范围**：`TenantDiffStandaloneExceptionHandler`（`@RestControllerAdvice(basePackages = "com.diff.standalone.web.controller")`）统一处理 diff 模块异常，包括参数校验（HTTP 400）、JSON 解析（HTTP 400）、业务异常（按错误码映射：404/409/422）和未预期异常（HTTP 500），**所有情况均返回 `ApiResponse` 格式**，不会出现 Spring 默认错误响应
 
+### 4.7 Runbook
+
+| 场景 | 首要确认项 | 立即动作 | 后续动作 |
+|------|-----------|---------|---------|
+| `session/create` 超时或失败 | 应用日志、数据源连通性、插件加载异常 | 停止自动重试，先确认是否有大范围 scope | 缩小 scope，定位慢 SQL 或插件异常后再重试 |
+| Apply 执行失败 | `apply_record.status='FAILED'` + ERROR 日志 `执行 Apply 动作失败` | 暂停重复 execute；查询 `apply_record` 获取错误详情和诊断 JSON | 主库场景按审计记录和日志排障；外部数据源场景额外核对目标库是否已有部分写入 |
+| Apply 目标租约超时 | `xai_tenant_diff_apply_lease` 中存在过期租约 | 确认对应 session 的 Apply 是否异常中断 | 过期租约会在下次 acquire 时自动清理；紧急情况可手动删除 |
+| PARTIAL 执行被拒绝 | `selectionMode`、`previewToken`、`selectedActionIds`、是否包含子表 action | 重新走一次 preview，使用最新 actionId 与 token | 若业务强依赖子表勾选，按已知限制评估 V2 方案，不要手工伪造 actionId |
+| Rollback 失败 | apply_record 状态、target 数据源类型、快照是否存在 | 确认是否命中 `DIFF_E_3001` / `DIFF_E_2004` / `DIFF_E_2005` | 主库方向修复前置状态后再试；外部数据源方向按业务脚本人工回滚 |
+| 数据增长过快 | `result` / `snapshot` / `decision_record` 行数与磁盘占用 | 暂停大范围 compare 或 preview | 按第 5 章建议执行分批清理，并复核回滚窗口是否已关闭 |
+
 ---
 
-## 5. 数据生命周期
+## 5. 数据留存与清理（Retention / Cleanup）
 
 ### 5.0 数据生命周期总览
 
@@ -755,16 +834,16 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/execute' \
 flowchart LR
     subgraph 写入阶段
         C["Compare"] -->|"写入"| S["session<br/>(长期保留)"]
-        C -->|"写入 N 条"| R["result<br/>(90 天 TTL)"]
+        C -->|"写入 N 条"| R["result<br/>(建议 90 天)"]
         A["Apply"] -->|"写入"| AR["apply_record<br/>(长期保留)"]
-        A -->|"写入 M 条"| SN["snapshot<br/>(30 天 TTL)"]
-        D["Decision"] -->|"写入 K 条"| DR["decision_record<br/>(90 天 TTL)"]
+        A -->|"写入 M 条"| SN["snapshot<br/>(建议 30 天)"]
+        D["Decision"] -->|"写入 K 条"| DR["decision_record<br/>(建议 90 天)"]
     end
 
     subgraph 清理阶段
-        R -->|"定期清理"| DEL1["DELETE<br/>created_at < 90d"]
-        SN -->|"定期清理"| DEL2["DELETE<br/>started_at < 30d"]
-        DR -->|"定期清理"| DEL3["DELETE<br/>created_at < 90d"]
+        R -->|"运维脚本/DB 作业"| DEL1["DELETE<br/>created_at < 90d"]
+        SN -->|"运维脚本/DB 作业"| DEL2["DELETE<br/>started_at < 30d"]
+        DR -->|"运维脚本/DB 作业"| DEL3["DELETE<br/>created_at < 90d"]
     end
 
     style S fill:#e8eaf6
@@ -774,9 +853,11 @@ flowchart LR
     style DR fill:#fff9c4
 ```
 
-> **蓝色**：轻量级审计记录，可长期保留
-> **黄色**：中等体量，建议 90 天 TTL
-> **红色**：大字段（MB 级），建议 30 天 TTL，最激进清理
+> 当前版本**没有**内建 TTL 或定时清理任务；上图中的 90 天 / 30 天是推荐运维策略，不是框架自动行为。
+> **蓝色**：轻量级审计记录，可长期保留（含 Apply 失败记录，通过独立事务持久化）
+> **黄色**：中等体量，建议 90 天留存
+> **红色**：大字段（MB 级），建议 30 天留存，前提是业务已关闭对应回滚窗口
+> **apply_lease 表**：不在图中展示，因为它是临时占用（Apply 进行中持有，完成后自动释放），正常情况下表为空。过期租约在下次 acquire 时自动清理
 
 ### 5.1 数据增长预估
 
@@ -787,11 +868,13 @@ flowchart LR
 | `xai_tenant_diff_apply_record` | +1 行 | `planJson`（KB~MB 级） |
 | `xai_tenant_diff_snapshot` | +M 行（M = 受影响业务对象数） | `snapshotJson`（可能 MB 级） |
 | `xai_tenant_diff_decision_record` | +K 行（K = 决策记录数） | `decisionReason`、`errorMsg`（KB 级） |
+| `xai_tenant_diff_apply_lease` | 0~1 行（Apply 进行中临时占用） | 无大字段，Apply 完成后自动释放 |
 
-### 5.2 清理策略与 SQL 示例
+### 5.2 清理建议与 SQL 示例（运维执行）
 
-- **result 表**：对比结果在 Apply 完成后仅用于审计，可设置 TTL 定期清理（建议保留 90 天）
-- **snapshot 表**：快照在回滚完成后不再使用，可更激进清理（建议保留 30 天）
+- 当前版本未提供清理调度器、TTL 配置或归档任务，以下 SQL 仅作为运维侧执行示例
+- **result 表**：对比结果在 Apply 完成后仅用于审计，建议保留 90 天
+- **snapshot 表**：快照在回滚窗口关闭后才可清理，建议保留 30 天
 - **session / apply_record**：轻量级审计记录，可长期保留
 - **decision_record**：决策审计记录，可按需保留
 
@@ -810,6 +893,11 @@ DELETE s FROM xai_tenant_diff_snapshot s
 -- 清理 90 天前的决策记录
 DELETE FROM xai_tenant_diff_decision_record
 WHERE created_at < DATE_SUB(NOW(), INTERVAL 90 DAY);
+
+-- 清理过期的 Apply 租约（正常情况下不需要，acquire 时自动清理）
+-- 仅在怀疑租约泄漏时使用
+DELETE FROM xai_tenant_diff_apply_lease
+WHERE expires_at < NOW();
 ```
 
 ---
@@ -897,18 +985,21 @@ xai:
 - 文档与脚本已同步
 - 本次发布的版本号已确定
 
-### 7.2 发布检查清单
+### 7.2 发布验收清单（Acceptance）
 
 **代码与测试**：
 - [ ] `./mvnw test` 通过
 - [ ] `./mvnw -pl tenant-diff-demo -am package -DskipTests` 构建成功
 - [ ] 关键主流程（create session / query / apply / rollback）已在本机或 CI 环境验证
+- [ ] `tenant-diff.standalone.enabled` 开关行为已验证（关闭时不暴露端点，开启后探活返回 `DIFF_E_1001`）
+- [ ] PARTIAL 选择链路已验证：preview 返回 actionId/token，篡改 token 返回 `DIFF_E_2012`，子表 actionId 返回 `DIFF_E_0001`
 
 **文档与说明**：
 - [ ] `README.md` 已同步
 - [ ] `docs/README.md` 已同步
 - [ ] `CHANGELOG.md` 已更新
 - [ ] 若有破坏性变更，已补迁移说明
+- [ ] 留存与清理策略已与运维窗口对齐，无将"推荐策略"误写为"系统自动能力"
 
 **发布元信息**：
 - [ ] 版本号已从 `SNAPSHOT` 或开发态切换到目标版本
@@ -1081,7 +1172,7 @@ CHANGELOG.md:
 
 1. **Demo 使用 H2 内存数据库**：重启后数据会重建，不适用于生产环境
 2. **Apply 示例脚本基于默认种子数据**：不适合作为通用生产脚本
-3. **Apply 失败无 DB 审计记录**：失败时 `@Transactional` 回滚会连同 `apply_record` 和 `snapshot` 一起丢失，排查只能依赖应用 ERROR 日志
+3. ~~**Apply 失败无 DB 审计记录**~~ **已解决**：`apply_record` 通过 `ApplyAuditService`（`REQUIRES_NEW` 独立事务）持久化，失败也保留为 `FAILED` 状态
 4. **外部数据源 Apply 非分布式事务**：主库审计与外部库 SQL 之间不保证原子性
 5. **Rollback v1 仅支持主库方向**：外部数据源场景需手动回滚
 6. **影响行数保护仅 PlanBuilder 阶段校验**：执行端不二次校验 `maxAffectedRows`，绕过 `PlanBuilder` 可能触发大规模写入
@@ -1089,7 +1180,7 @@ CHANGELOG.md:
 8. **同步对比可能超时**：`create` API 同步执行对比，大范围对比时需注意客户端和服务端超时设置
 9. **并发控制依赖乐观锁**：同一 Session 的 Apply/Rollback 需串行执行，并发请求会触发 `DIFF_E_2006` / `DIFF_E_3002`
 10. **自动发布未接入**：当前仓库尚未接入自动发布到 Maven Central 的流程
-11. **Selection V1 仅支持主表**：`selectionMode=PARTIAL` 仅允许选择 `dependencyLevel=0` 的主表动作，子表动作被静默排除
+11. **Selection V1 仅支持主表**：`selectionMode=PARTIAL` 仅允许选择 `dependencyLevel=0` 的主表动作；若传入子表 actionId，会返回 HTTP 400 + `DIFF_E_0001`
 12. **ALL 模式无 preview 强制**：`selectionMode=ALL` 可跳过 preview 直接 execute，不要求 previewToken
 13. **previewToken 无过期时间**：token 只要 diff 数据不变即永久有效，不含时间维度
 14. **API 路径前缀不一致**：Session/Apply 使用 `/api/tenantDiff/standalone/`（驼峰），Decision 使用 `/api/tenant-diff/`（连字符），鉴权规则需分别覆盖
