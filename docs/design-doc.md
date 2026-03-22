@@ -1719,6 +1719,8 @@ tenant-diff.datasources.<key>.password=...
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `tenant-diff.apply.preview-action-limit` | int | `5000` | Preview 返回的 action 数量上限，超过时抛出 `PREVIEW_TOO_LARGE` |
+| `tenant-diff.apply.preview-token-ttl` | Duration | `PT30M` | PARTIAL previewToken 有效期；超时返回 `DIFF_E_2015` |
+| `tenant-diff.apply.max-compare-age` | Duration | `PT30M` | compare 结果最大可执行年龄；超时返回 `DIFF_E_2016` |
 
 ### 10.4 DiffSessionOptions（可选）
 
@@ -1807,7 +1809,8 @@ _代码位置_：`TenantDiffProperties`、`TenantDiffSchemaInitializer`、`Tenan
 | 回滚不可链式 | 回滚自身不保存快照，不支持"回滚的回滚" | 如需反复操作建议重新 Apply |
 | Selection V1 仅支持主表 | `selectionMode=PARTIAL` 仅允许选择 `dependencyLevel=0` 的主表动作；若传入子表 actionId，返回 HTTP 400 + `DIFF_E_0001` | 二期支持子表联动选择 |
 | ALL 模式无 preview 强制 | `selectionMode=ALL` 无需 previewToken，可绕过"先预览再确认"流程 | 需在上层（Controller/前端）强制 |
-| previewToken 无过期时间 | 只要 diff 数据未变，token 永久有效 | 二期可在 token 中编入时间维度 |
+| ~~previewToken 无过期时间~~ | ~~只要 diff 数据未变，token 永久有效~~ | **已实现**：受 `tenant-diff.apply.preview-token-ttl` 控制，超时返回 `DIFF_E_2015` |
+| compare 结果有执行年龄限制 | `session.finishedAt` 超过 `tenant-diff.apply.max-compare-age` 后 execute 拒绝继续使用旧会话 | 当前已实现，返回 `DIFF_E_2016` |
 
 ### 12.2 ADR 缺口建议
 

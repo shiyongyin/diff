@@ -268,6 +268,8 @@ _代码位置_：`TenantDiffSchemaInitConfiguration`、`TenantDiffSchemaInitiali
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `tenant-diff.apply.preview-action-limit` | int | `5000` | Preview 返回的 action 数量上限，超过时返回 `DIFF_E_2014` |
+| `tenant-diff.apply.preview-token-ttl` | Duration | `PT30M` | PARTIAL previewToken 的有效期；超过后 execute 返回 `DIFF_E_2015` |
+| `tenant-diff.apply.max-compare-age` | Duration | `PT30M` | compare 结果最大可执行年龄；超过后 execute 返回 `DIFF_E_2016` |
 
 #### 1.5.5 多数据源配置
 
@@ -470,6 +472,8 @@ flowchart LR
 - Apply 失败：`apply_record` 通过独立事务（`ApplyAuditService`）保留为 `FAILED` 状态（含错误详情），可在数据库中查询；快照和业务数据变更回滚保证一致性
 - 外部数据源 Apply：主库审计与外部库写入不是分布式事务；出现跨库不一致时，应先停止重试，再按 `applyId`、目标库数据和业务键人工核对
 - Preview 超限：`/apply/preview` 超过 `tenant-diff.apply.preview-action-limit` 时返回 `DIFF_E_2014`；降级方式是缩小筛选范围，不是截断返回
+- Preview token 过期：`selectionMode=PARTIAL` 且 previewToken 超过 `tenant-diff.apply.preview-token-ttl` 时返回 `DIFF_E_2015`；降级方式是重新 preview，而不是复用旧 token
+- Compare 结果过期：`session.finishedAt` 超过 `tenant-diff.apply.max-compare-age` 时 execute 返回 `DIFF_E_2016`；降级方式是重新创建 session 并 compare
 - Rollback 边界：Rollback v1 仅支持主库 target，外部数据源场景直接返回 `DIFF_E_3001`
 
 ---
@@ -721,6 +725,23 @@ curl -X POST 'http://localhost:8080/api/tenantDiff/standalone/apply/execute' \
 
 - 触发场景：preview 返回的 action 数量超过 `previewActionLimit`（默认 5000）
 - 解决方案：通过 `options.businessTypes`、`options.businessKeys` 或 `options.diffTypes` 缩小筛选范围
+
+**DIFF_E_2015: 预览令牌已过期，请重新预览 (PREVIEW_TOKEN_EXPIRED)**
+
+- 触发场景：`selectionMode=PARTIAL` 时，客户端回传的 `previewToken` 已超过 `tenant-diff.apply.preview-token-ttl`
+- 排查步骤：
+  1. 检查 preview 与 execute 之间的时间间隔
+  2. 检查当前环境 `tenant-diff.apply.preview-token-ttl` 配置值
+- 解决方案：重新调用 preview 获取新的 token 与 action 列表；必要时适当放宽 TTL
+
+**DIFF_E_2016: 对比结果已过期，请重新创建会话 (APPLY_COMPARE_TOO_OLD)**
+
+- 触发场景：execute 时发现 `session.finishedAt` 距当前时间已超过 `tenant-diff.apply.max-compare-age`
+- 排查步骤：
+  1. 查询 `xai_tenant_diff_session.finished_at`
+  2. 检查当前环境 `tenant-diff.apply.max-compare-age` 配置值
+  3. 确认是否把很早之前的 session 复用于当前执行
+- 解决方案：重新创建 session 并 compare；如业务允许更长人工确认窗口，可增大 `max-compare-age`
 
 #### Rollback 错误
 
@@ -1182,5 +1203,5 @@ CHANGELOG.md:
 10. **自动发布未接入**：当前仓库尚未接入自动发布到 Maven Central 的流程
 11. **Selection V1 仅支持主表**：`selectionMode=PARTIAL` 仅允许选择 `dependencyLevel=0` 的主表动作；若传入子表 actionId，会返回 HTTP 400 + `DIFF_E_0001`
 12. **ALL 模式无 preview 强制**：`selectionMode=ALL` 可跳过 preview 直接 execute，不要求 previewToken
-13. **previewToken 无过期时间**：token 只要 diff 数据不变即永久有效，不含时间维度
+13. **previewToken / compare 结果有时间窗口**：分别受 `tenant-diff.apply.preview-token-ttl` 与 `tenant-diff.apply.max-compare-age` 控制，超时后需重新 preview 或重新 compare
 14. **API 路径前缀不一致**：Session/Apply 使用 `/api/tenantDiff/standalone/`（驼峰），Decision 使用 `/api/tenant-diff/`（连字符），鉴权规则需分别覆盖

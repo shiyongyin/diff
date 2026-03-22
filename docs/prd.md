@@ -694,6 +694,8 @@ sequenceDiagram
 | `DIFF_E_2011` | SELECTION_INVALID_ID | 所选记录标识无效 |
 | `DIFF_E_2012` | SELECTION_STALE | 数据已变化，请重新预览 |
 | `DIFF_E_2014` | PREVIEW_TOO_LARGE | 预览结果过大，请缩小筛选范围 |
+| `DIFF_E_2015` | PREVIEW_TOKEN_EXPIRED | 预览令牌已过期，请重新预览 |
+| `DIFF_E_2016` | APPLY_COMPARE_TOO_OLD | 对比结果已过期，请重新创建会话 |
 
 #### Rollback 错误
 
@@ -804,6 +806,8 @@ sequenceDiagram
 - 外部数据源 Apply 使用独立 `DataSourceTransactionManager` 本地事务，与主库审计不是分布式事务；若出现跨库不一致，需要按 `applyId`、业务键和目标库实际写入结果进行人工止损
 - Rollback v1 若 target 指向外部数据源，会直接返回 `DIFF_E_3001`；若 Apply 后目标侧数据又被人工修改，回滚结果只保证"尽量恢复到快照状态"，不承诺完全覆盖外部新增语义
 - preview action 数量超过 `tenant-diff.apply.preview-action-limit`（默认 `5000`）时返回 `DIFF_E_2014`，降级策略是缩小筛选范围，而不是自动截断结果
+- PARTIAL 场景下 `previewToken` 受 `tenant-diff.apply.preview-token-ttl` 控制；超过 TTL 返回 `DIFF_E_2015`，调用方必须重新 preview 获取最新 token
+- execute 会校验 compare 结果年龄；当 `session.finishedAt` 距当前时间超过 `tenant-diff.apply.max-compare-age` 时返回 `DIFF_E_2016`，调用方必须重新创建会话并 compare
 
 ### 7.5 部署安全（Deployment Safety）
 
@@ -933,4 +937,4 @@ sequenceDiagram
 | 影响行数保护边界 | maxAffectedRows 仅在 PlanBuilder 阶段校验，执行端不二次校验 | 二期考虑执行端补校验 |
 | Selection V1 仅支持主表 | `selectionMode=PARTIAL` 仅允许选择主表动作（dependencyLevel=0）；若传入子表 actionId，返回 HTTP 400 + `DIFF_E_0001` | 二期支持子表联动选择 |
 | ALL 模式无 preview 强制 | `selectionMode=ALL` 可跳过 preview 直接 execute，不要求 previewToken | 上层/前端强制流程 |
-| previewToken 无过期时间 | token 只要 diff 数据不变即永久有效 | 二期编入时间维度 |
+| ~~previewToken 无过期时间~~ | ~~token 只要 diff 数据不变即永久有效~~ | **已实现**：受 `tenant-diff.apply.preview-token-ttl` 控制，超时返回 `DIFF_E_2015` |
