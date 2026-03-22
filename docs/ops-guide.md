@@ -1148,6 +1148,8 @@ BASE_URL=http://myhost:8080 SKIP_BOOT=1 ./scripts/smoke-test.sh
 - 新功能或行为变化附带测试
 - 文档、示例、接口说明与代码保持一致
 - 如涉及破坏性变更，在 PR 描述中明确说明影响面
+- Git 提交说明默认使用中文描述，便于仓库历史统一检索与团队协作
+- 建议使用简洁中文前缀，如 `修复：`、`测试：`、`文档：`、`重构：`、`构建：`
 
 ### 9.3 PR 清单
 
@@ -1173,9 +1175,16 @@ BASE_URL=http://myhost:8080 SKIP_BOOT=1 ./scripts/smoke-test.sh
 
 commit message:
 ```
-feat: 重构 Apply 计划构建器
+重构：调整 Apply 计划构建器
 
 BREAKING CHANGE: PlanBuilder.build() 签名变更，移除了 deprecated 的 options 参数
+```
+
+普通提交示例:
+```text
+修复：加固 apply 与 rollback 边界场景
+测试：新增 MySQL 端到端覆盖
+文档：优化 GitHub 首页 README 展示
 ```
 
 CHANGELOG.md:
