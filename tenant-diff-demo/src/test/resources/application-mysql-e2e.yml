@@ -1,0 +1,23 @@
+spring:
+  datasource:
+    url: jdbc:mysql://${TENANT_DIFF_TEST_MYSQL_HOST:127.0.0.1}:${TENANT_DIFF_TEST_MYSQL_PORT:3306}/xai_tenant_diff_e2e_primary?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: ${TENANT_DIFF_TEST_MYSQL_USERNAME:root}
+    password: ${TENANT_DIFF_TEST_MYSQL_PASSWORD:}
+
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema-mysql-e2e.sql
+
+tenant-diff:
+  standalone:
+    enabled: true
+    schema:
+      init-mode: none
+  datasources:
+    ext:
+      url: jdbc:mysql://${TENANT_DIFF_TEST_MYSQL_HOST:127.0.0.1}:${TENANT_DIFF_TEST_MYSQL_PORT:3306}/xai_tenant_diff_e2e_ext?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+      driver-class-name: com.mysql.cj.jdbc.Driver
+      username: ${TENANT_DIFF_TEST_MYSQL_USERNAME:root}
+      password: ${TENANT_DIFF_TEST_MYSQL_PASSWORD:}
