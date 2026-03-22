@@ -6,7 +6,6 @@ import com.diff.standalone.web.ApiResponse;
 import com.diff.standalone.web.dto.request.SaveDecisionsRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.web.bind.annotation.*;
 
@@ -26,7 +25,6 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/tenant-diff/decision")
 @ConditionalOnProperty(prefix = "tenant-diff.standalone", name = "enabled", havingValue = "true")
-@ConditionalOnBean(DecisionRecordService.class)
 public class TenantDiffStandaloneDecisionController {
 
     private final DecisionRecordService decisionRecordService;

@@ -121,6 +121,6 @@ public class TenantDiffStandaloneApplyController {
      */
     @PostMapping("/rollback")
     public ApiResponse<TenantDiffRollbackResponse> rollback(@RequestBody @Valid ApplyRollbackRequest request) {
-        return ApiResponse.ok(rollbackService.rollback(request.getApplyId()));
+        return ApiResponse.ok(rollbackService.rollback(request.getApplyId(), request.isAcknowledgeDrift()));
     }
 }

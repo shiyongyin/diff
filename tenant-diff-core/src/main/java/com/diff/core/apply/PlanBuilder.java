@@ -139,6 +139,12 @@ public class PlanBuilder {
                             continue;
                         }
                         if (type == DiffType.DELETE && !allowDelete) {
+                            if (effectiveOptions.getMode() == ApplyMode.EXECUTE) {
+                                throw new TenantDiffException(
+                                    ErrorCode.APPLY_DELETE_NOT_ALLOWED,
+                                    "DELETE action requires allowDelete=true: businessType="
+                                        + businessDiff.getBusinessType() + ", businessKey=" + businessDiff.getBusinessKey());
+                            }
                             continue;
                         }
 

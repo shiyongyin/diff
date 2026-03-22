@@ -6,6 +6,8 @@ import com.diff.core.domain.exception.TenantDiffException;
 import com.diff.standalone.persistence.entity.TenantDiffApplyLeasePo;
 import com.diff.standalone.persistence.mapper.TenantDiffApplyLeaseMapper;
 import com.diff.standalone.service.ApplyLeaseService;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.DeadlockLoserDataAccessException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -73,7 +75,7 @@ public class ApplyLeaseServiceImpl implements ApplyLeaseService {
                 .build();
             try {
                 applyLeaseMapper.insert(lease);
-            } catch (DuplicateKeyException e) {
+            } catch (DuplicateKeyException | DeadlockLoserDataAccessException | CannotAcquireLockException e) {
                 throw new TenantDiffException(
                     ErrorCode.APPLY_TARGET_BUSY,
                     "target tenant is already locked by another apply", e);

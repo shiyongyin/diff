@@ -46,7 +46,8 @@ public class TenantDiffStandaloneExceptionHandler {
         entry(ErrorCode.APPLY_COMPARE_TOO_OLD.getCode(), HttpStatus.CONFLICT),
         entry(ErrorCode.ROLLBACK_DRIFT_DETECTED.getCode(), HttpStatus.CONFLICT),
         entry(ErrorCode.ROLLBACK_CONCURRENT_CONFLICT.getCode(), HttpStatus.CONFLICT),
-        entry(ErrorCode.SESSION_ALREADY_APPLIED.getCode(), HttpStatus.CONFLICT)
+        entry(ErrorCode.SESSION_ALREADY_APPLIED.getCode(), HttpStatus.CONFLICT),
+        entry(ErrorCode.INTERNAL_ERROR.getCode(), HttpStatus.INTERNAL_SERVER_ERROR)
     );
 
     /**

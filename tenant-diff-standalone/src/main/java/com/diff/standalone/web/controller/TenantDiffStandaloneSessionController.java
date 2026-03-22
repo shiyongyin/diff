@@ -2,6 +2,8 @@ package com.diff.standalone.web.controller;
 
 
 import com.diff.core.domain.schema.BusinessSchema;
+import com.diff.core.domain.exception.ErrorCode;
+import com.diff.core.domain.exception.TenantDiffException;
 import com.diff.standalone.web.dto.response.PageResult;
 import com.diff.standalone.web.dto.response.TenantDiffBusinessSummary;
 import com.diff.core.domain.diff.BusinessDiff;
@@ -158,7 +160,7 @@ public class TenantDiffStandaloneSessionController {
     ) {
         Optional<BusinessDiff> diff = service.getBusinessDetail(sessionId, businessType, businessKey);
         if (diff.isEmpty()) {
-            return ApiResponse.fail(com.diff.core.domain.exception.ErrorCode.BUSINESS_DETAIL_NOT_FOUND);
+            throw new TenantDiffException(ErrorCode.BUSINESS_DETAIL_NOT_FOUND);
         }
         BusinessDiff result = diff.get();
         if (view != DiffDetailView.FULL) {

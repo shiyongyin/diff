@@ -559,12 +559,16 @@ public class TenantDiffStandaloneRollbackServiceImpl implements TenantDiffStanda
                 if (table == null || table.getRecords() == null) {
                     continue;
                 }
+                String relationFkColumn = relationFkColumnOf(businessData.getBusinessType(), table.getTableName());
                 for (com.diff.core.domain.model.RecordData record : table.getRecords()) {
                     if (record == null || record.getFields() == null) {
                         continue;
                     }
                     Map<String, Object> normalizedFields = new LinkedHashMap<>();
                     for (Map.Entry<String, Object> entry : record.getFields().entrySet()) {
+                        if (relationFkColumn != null && relationFkColumn.equals(entry.getKey())) {
+                            continue;
+                        }
                         normalizedFields.put(entry.getKey(), normalizeComparableValue(entry.getValue()));
                     }
                     record.setFields(normalizedFields);
@@ -573,6 +577,14 @@ public class TenantDiffStandaloneRollbackServiceImpl implements TenantDiffStanda
             }
         }
         return new ArrayList<>(normalized.values());
+    }
+
+    private String relationFkColumnOf(String businessType, String tableName) {
+        BusinessSchema.TableRelation relation = relationOf(businessType, tableName);
+        if (relation == null || relation.getFkColumn() == null || relation.getFkColumn().isBlank()) {
+            return null;
+        }
+        return relation.getFkColumn();
     }
 
     private Object normalizeComparableValue(Object value) {

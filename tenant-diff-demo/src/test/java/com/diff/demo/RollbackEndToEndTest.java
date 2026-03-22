@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Rollback 端到端测试：验证回滚后目标租户数据完整恢复到 apply 前状态。
@@ -201,11 +202,7 @@ class RollbackEndToEndTest {
         boolean hasDelete = plan.getActions().stream()
             .anyMatch(a -> a.getDiffType() == DiffType.DELETE);
 
-        if (!hasDelete) {
-            // 当前种子数据中 tenant1 是超集，A_TO_B 方向不产生 DELETE
-            // 这个场景在当前数据下无法测试，跳过
-            return;
-        }
+        assumeTrue(hasDelete, "当前种子数据下未产生 DELETE action，此用例应显示为跳过而非假绿通过");
 
         TenantDiffApplyExecuteResponse response = applyService.execute(plan);
         assertEquals(ApplyRecordStatus.SUCCESS, response.getStatus());
