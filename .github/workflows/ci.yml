@@ -19,6 +19,7 @@ jobs:
         image: mysql:8.0
         env:
           MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+          TZ: Asia/Shanghai
         ports:
           - 3306:3306
         options: >-
@@ -44,6 +45,7 @@ jobs:
       - name: Run tests and verify
         env:
           TENANT_DIFF_TEST_MYSQL_ENABLED: 'true'
+          TZ: Asia/Shanghai
         run: ./mvnw -B -ntp verify
 
       - name: Build demo package
