@@ -47,7 +47,7 @@
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────┐       │
 │  │  MySQL E2E Tests（6 个测试类，真实 MySQL）                  │       │
-│  │  @ActiveProfiles({"test", "mysql-e2e"})                   │       │
+│  │  @ActiveProfiles({"test", "mysql-e2e"}) + 显式环境变量门禁   │       │
 │  │  验证：SQL 方言、Trigger、事务隔离、InnoDB 锁、并发         │       │
 │  └──────────────────────────────────────────────────────────┘       │
 │                                                                     │
@@ -379,6 +379,7 @@ mvn test -Dtest='!Mysql*'
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
+| `TENANT_DIFF_TEST_MYSQL_ENABLED` | `false` | 显式开启真实 MySQL E2E；未开启时测试类会被跳过 |
 | `TENANT_DIFF_TEST_MYSQL_HOST` | `127.0.0.1` | MySQL 主机 |
 | `TENANT_DIFF_TEST_MYSQL_PORT` | `3306` | MySQL 端口 |
 | `TENANT_DIFF_TEST_MYSQL_USERNAME` | `root` | MySQL 用户名 |
@@ -387,11 +388,12 @@ mvn test -Dtest='!Mysql*'
 #### 运行命令
 
 ```bash
-# 使用默认配置（本地 MySQL，无密码）
+# 使用默认连接参数（127.0.0.1:3306, root, 空密码），并显式开启 MySQL E2E
 cd tenant-diff-demo
-mvn test -Dtest='Mysql*'
+TENANT_DIFF_TEST_MYSQL_ENABLED=true mvn test -Dtest='Mysql*'
 
 # 使用自定义配置
+TENANT_DIFF_TEST_MYSQL_ENABLED=true \
 TENANT_DIFF_TEST_MYSQL_HOST=192.168.1.100 \
 TENANT_DIFF_TEST_MYSQL_PORT=3306 \
 TENANT_DIFF_TEST_MYSQL_USERNAME=test_user \
@@ -417,7 +419,8 @@ cd tenant-diff-demo
 mvn test
 ```
 
-> **注意：** MySQL E2E 测试需要 MySQL 实例可用，否则这部分测试会因连接失败而报错。
+> **注意：** 默认 `mvn test` 只保证 H2 集成测试可直接运行；真实 MySQL E2E 需要显式设置
+> `TENANT_DIFF_TEST_MYSQL_ENABLED=true`，否则相关测试类会被跳过。
 
 ---
 

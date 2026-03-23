@@ -1,6 +1,8 @@
 package com.diff.demo;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -31,10 +33,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 从而触发上限校验。</p>
  *
  * <h3>运行前提</h3>
- * <p>需要运行中的 MySQL 实例（由 {@code application-mysql-e2e.yml} 配置）。</p>
+ * <p>需要设置 {@code TENANT_DIFF_TEST_MYSQL_ENABLED=true}，并提供可访问的 MySQL
+ * 实例（由 {@code application-mysql-e2e.yml} 配置）。</p>
  */
 @SpringBootTest(properties = "tenant-diff.apply.preview-action-limit=1")
 @AutoConfigureMockMvc
+@Tag("mysql-e2e")
+@EnabledIfEnvironmentVariable(named = "TENANT_DIFF_TEST_MYSQL_ENABLED", matches = "(?i:true|1|yes)")
 @ActiveProfiles({"test", "mysql-e2e"})
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class MysqlPreviewLimitE2ETest {

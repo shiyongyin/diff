@@ -4,7 +4,9 @@ import com.diff.demo.plugin.ExampleProductPlugin;
 import com.diff.standalone.datasource.DiffDataSourceRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -46,6 +48,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <h3>运行前提</h3>
  * <ul>
+ *   <li>需要设置 {@code TENANT_DIFF_TEST_MYSQL_ENABLED=true}</li>
  *   <li>需要运行中的 MySQL 实例（由 {@code application-mysql-e2e.yml} 配置）</li>
  *   <li>{@code allow-bean-definition-overriding=true} 允许测试配置覆盖默认 Bean</li>
  * </ul>
@@ -54,6 +57,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest(properties = "spring.main.allow-bean-definition-overriding=true")
 @AutoConfigureMockMvc
+@Tag("mysql-e2e")
+@EnabledIfEnvironmentVariable(named = "TENANT_DIFF_TEST_MYSQL_ENABLED", matches = "(?i:true|1|yes)")
 @ActiveProfiles({"test", "mysql-e2e"})
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class MysqlWarningDegradationE2ETest {

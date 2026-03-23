@@ -4,7 +4,9 @@ import com.diff.standalone.datasource.DiffDataSourceRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -60,6 +62,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <h3>运行前提</h3>
  * <ul>
+ *   <li>需要设置 {@code TENANT_DIFF_TEST_MYSQL_ENABLED=true}</li>
  *   <li>需要运行中的 MySQL 实例（由 {@code application-mysql-e2e.yml} 配置）</li>
  *   <li>初始化脚本 {@code schema-mysql-e2e.sql} 会自动建表并插入种子数据</li>
  *   <li>每个测试方法后通过 {@link DirtiesContext} 重建上下文，保证测试隔离</li>
@@ -71,6 +74,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
+@Tag("mysql-e2e")
+@EnabledIfEnvironmentVariable(named = "TENANT_DIFF_TEST_MYSQL_ENABLED", matches = "(?i:true|1|yes)")
 @ActiveProfiles({"test", "mysql-e2e"})
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class MysqlReleaseGateE2ETest {
